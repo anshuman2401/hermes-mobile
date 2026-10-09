@@ -24,6 +24,8 @@ java -version                       # confirm JDK 21
 
 Set the SDK environment variable in your shell before the verifier if Android Studio has not already exposed the SDK, for example `export ANDROID_HOME=/path/to/android-sdk`. No Hermes endpoint or app configuration is needed for this command: the JVM tests use synthetic fixtures. The verifier runs repository policy checks, JVM tests, Android lint, and debug APK assembly. It does not run the app, package instrumentation tests, or test a device or host. Reports and the debug APK are generated under `app/build/`. See the [verification runbook](specs/testing/verification.md) for report paths and the clean final-candidate command. If verification cannot run, report the missing prerequisite or failing stage rather than treating assembly or cached output as device evidence.
 
+The release application ID is `io.github.anshuman2401.hermesmobile`; debug builds use `io.github.anshuman2401.hermesmobile.debug`. This is a separate Android app from builds using `com.hermes.bot`, so installing it does not update those builds or transfer their saved local data.
+
 For a documentation-only change, review the text and links and run `git diff --check`; the full verifier is unnecessary unless specifically requested. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.
 
 This repository has no GitHub Actions verification workflow. Run `./scripts/verify.sh` locally for executable changes and include the results in the PR as described in [CONTRIBUTING.md](CONTRIBUTING.md).

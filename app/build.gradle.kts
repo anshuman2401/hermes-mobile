@@ -8,7 +8,7 @@ android {
     compileSdk { version = release(37) }
 
     defaultConfig {
-        applicationId = "com.hermes.bot"
+        applicationId = "io.github.anshuman2401.hermesmobile"
         testInstrumentationRunner = "com.hermes.bot.feature.chat.StreamProfileRunner"
         minSdk = 26
         targetSdk = 36
