@@ -1,0 +1,65 @@
+{
+  "step_1_mint_fresh_ticket": {
+    "request": "POST /api/auth/ws-ticket",
+    "response": {
+      "ticket": "<redacted-fresh-ticket>",
+      "ttl_seconds": 30
+    }
+  },
+  "step_2_reconnect_ws": {
+    "uri": "/api/ws",
+    "subprotocols": [
+      "hermes-gateway-v1",
+      "hermes-gateway-ticket.<redacted-fresh-ticket>"
+    ],
+    "negotiated_subprotocol": "hermes-gateway-v1"
+  },
+  "step_3_gateway_ready": {
+    "type": "gateway.ready",
+    "payload": {
+      "replay_epoch": "<redacted-replay-epoch-uuid>",
+      "heartbeat": true,
+      "change_events": true
+    },
+    "epoch_match": true
+  },
+  "step_4_session_resume": {
+    "request": {
+      "method": "session.resume",
+      "params": {
+        "session_id": "TEST-STORED-SESSION-KEY-1"
+      }
+    },
+    "response": {
+      "session_id": "TEST-RUNTIME-SID-2",
+      "stored_session_id": "TEST-STORED-SESSION-KEY-1",
+      "message_count": 2
+    }
+  },
+  "step_5_session_events_since": {
+    "request": {
+      "method": "session.events.since",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-2",
+        "last_seen": 2
+      }
+    },
+    "response": {
+      "count": 1,
+      "latest_seq": 3,
+      "truncated": false,
+      "epoch": "<redacted-replay-epoch-uuid>",
+      "events": [
+        {
+          "type": "message.complete",
+          "payload": {
+            "status": "complete",
+            "text": "PONG"
+          },
+          "seq": 3,
+          "session_id": "TEST-RUNTIME-SID-2"
+        }
+      ]
+    }
+  }
+}

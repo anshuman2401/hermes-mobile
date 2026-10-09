@@ -1,0 +1,53 @@
+# Gradle and build outputs
+/.gradle/
+/.kotlin/
+/build/
+/app/build/
+*.hprof
+
+# Android SDK and local developer configuration
+local.properties
+.cxx/
+.externalNativeBuild/
+captures/
+
+# IDE and editor settings
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Signing materials, keys, and credentials (hard boundary)
+*.jks
+*.keystore
+debug.keystore
+release.keystore
+signing.properties
+keystore.properties
+secrets.properties
+*.pem
+*.key
+*.p12
+*.pkcs12
+.env
+.env.*
+!.env.example
+credentials.json
+google-services.json
+
+# Local token, credential, and test-secret artifacts
+/tokens/
+/credentials/
+/test-secrets/
+**/tokens.*
+**/credentials.*
+**/test-secrets.*
+*.token
+*.tokens
+*.credential
+*.credentials
+*.secret
+*.secrets

@@ -1,0 +1,58 @@
+{
+  "version": "0.21.1",
+  "release_date": "2026.9.7",
+  "config_version": 42,
+  "latest_config_version": 42,
+  "can_update_hermes": true,
+  "gateway_running": true,
+  "gateway_state": "running",
+  "gateway_mode": "multiple",
+  "auth_required": true,
+  "auth_providers": [
+    "basic"
+  ],
+  "auth_flows": [
+    "cookie",
+    "native_pkce"
+  ],
+  "components": {
+    "gateway": {
+      "status": "ok",
+      "state": "running"
+    },
+    "dashboard": {
+      "status": "ok",
+      "recent_unhandled_errors": 0,
+      "last_error_at": null,
+      "selftest": "unknown"
+    },
+    "storage": {
+      "status": "ok"
+    },
+    "platforms": {
+      "status": "ok",
+      "configured": 13,
+      "connected": 13
+    }
+  },
+  "overall": "ok",
+  "active_agents": 0,
+  "active_sessions": 0,
+  "gateway_busy": false,
+  "gateway_drainable": true,
+  "restart_drain_timeout": 60.0,
+  "nous_session_valid": "unknown",
+  "install_id": "<redacted-hex-id>",
+  "profiles": [
+    "default",
+    "architect",
+    "ca",
+    "ceo",
+    "coding",
+    "fitness",
+    "model-eval",
+    "reviewer",
+    "scout",
+    "trading-journal"
+  ]
+}

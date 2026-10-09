@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+    "type": "gateway.ready",
+    "payload": {
+      "skin": {
+        "theme": "default",
+        "custom_css": null
+      },
+      "change_events": true,
+      "heartbeat": true,
+      "replay_epoch": "<redacted-replay-epoch-uuid>"
+    }
+  }
+}

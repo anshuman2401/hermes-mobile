@@ -1,0 +1,15 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "req-capabilities",
+    "method": "gateway.capabilities",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "req-capabilities",
+    "result": {
+      "per_session_exclusive_submit": true
+    }
+  }
+}

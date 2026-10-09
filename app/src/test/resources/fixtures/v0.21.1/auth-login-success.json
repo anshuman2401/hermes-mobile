@@ -1,0 +1,29 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/auth/password-login",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "provider": "basic",
+      "username": "<redacted-username>",
+      "password": "<redacted-password>"
+    }
+  },
+  "response": {
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "set-cookie": [
+        "hermes_session_at=<redacted-token>; Max-Age=43200; Path=/; HttpOnly; SameSite=Lax",
+        "hermes_session_rt=<redacted-token>; Path=/; HttpOnly; SameSite=Lax",
+        "hermes_session_provider=basic; Max-Age=43200; Path=/; SameSite=Lax"
+      ]
+    },
+    "body": {
+      "ok": true,
+      "next": "/"
+    }
+  }
+}

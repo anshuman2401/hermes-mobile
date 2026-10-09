@@ -1,0 +1,69 @@
+{
+  "description": "Synthetic sanitized tool lifecycle event sequence (tool.generating, tool.start, tool.complete, tool.progress)",
+  "events": [
+    {
+      "comment": "Pre-start name-only hint emitted when display.tool_progress != 'off'",
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 10,
+        "type": "tool.generating",
+        "payload": {
+          "name": "terminal"
+        }
+      }
+    },
+    {
+      "comment": "Authoritative tool start with tool_id and invocation args",
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 11,
+        "type": "tool.start",
+        "payload": {
+          "tool_id": "call_test_tool_001",
+          "name": "terminal",
+          "context": "echo test",
+          "args": {
+            "command": "echo test"
+          }
+        }
+      }
+    },
+    {
+      "comment": "Optional progress callback (e.g. reasoning or subagent task step)",
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 12,
+        "type": "reasoning.available",
+        "payload": {
+          "text": "<redacted-reasoning-preview>"
+        }
+      }
+    },
+    {
+      "comment": "Authoritative tool complete with result and summary",
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 13,
+        "type": "tool.complete",
+        "payload": {
+          "tool_id": "call_test_tool_001",
+          "name": "terminal",
+          "args": {
+            "command": "echo test"
+          },
+          "duration_s": 0.045,
+          "result": "test\n",
+          "summary": "Ran `echo test`"
+        }
+      }
+    }
+  ]
+}

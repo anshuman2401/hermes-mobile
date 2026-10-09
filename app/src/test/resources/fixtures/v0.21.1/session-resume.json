@@ -1,0 +1,64 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "req-session-resume",
+    "method": "session.resume",
+    "params": {
+      "session_id": "TEST-STORED-SESSION-KEY-1"
+    }
+  },
+  "response_live_unpersisted": {
+    "jsonrpc": "2.0",
+    "id": "req-session-resume",
+    "result": {
+      "session_id": "TEST-RUNTIME-SID-1",
+      "stored_session_id": "TEST-STORED-SESSION-KEY-1",
+      "message_count": 0,
+      "messages": [],
+      "info": {
+        "model": "<redacted-model-name>",
+        "lazy": true,
+        "profile_name": "default"
+      }
+    }
+  },
+  "response_persisted": {
+    "jsonrpc": "2.0",
+    "id": "req-session-resume",
+    "result": {
+      "session_id": "TEST-RUNTIME-SID-1",
+      "resumed": "TEST-STORED-SESSION-KEY-1",
+      "session_key": "TEST-STORED-SESSION-KEY-1",
+      "message_count": 2,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Echo the single word: PONG"
+        },
+        {
+          "role": "assistant",
+          "content": "PONG"
+        }
+      ],
+      "info": {
+        "model": "<redacted-model-name>",
+        "cwd": "<redacted-cwd-path>",
+        "branch": "main",
+        "lazy": false,
+        "profile_name": "default"
+      },
+      "inflight": null,
+      "running": false,
+      "started_at": 1757817000.0,
+      "status": "idle"
+    }
+  },
+  "negative_response_not_found": {
+    "jsonrpc": "2.0",
+    "id": "req-session-resume-neg",
+    "error": {
+      "code": 4007,
+      "message": "session not found"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "req-session-create",
+    "method": "session.create",
+    "params": {
+      "title": "android-int-001-test",
+      "source": "android",
+      "close_on_disconnect": false
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "req-session-create",
+    "result": {
+      "session_id": "TEST-RUNTIME-SID-1",
+      "stored_session_id": "TEST-STORED-SESSION-KEY-1",
+      "message_count": 0,
+      "messages": [],
+      "info": {
+        "model": "<redacted-model-name>",
+        "tools": {},
+        "skills": {},
+        "cwd": "<redacted-cwd-path>",
+        "branch": "main",
+        "project": "<redacted-project-name>",
+        "lazy": true,
+        "desktop_contract": 1,
+        "profile_name": "default"
+      }
+    }
+  }
+}

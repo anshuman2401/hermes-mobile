@@ -1,0 +1,51 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "req-session-events-since",
+    "method": "session.events.since",
+    "params": {
+      "session_id": "TEST-RUNTIME-SID-1",
+      "last_seen": 0
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "req-session-events-since",
+    "result": {
+      "count": 3,
+      "epoch": "<redacted-replay-epoch-uuid>",
+      "latest_seq": 3,
+      "truncated": false,
+      "events": [
+        {
+          "type": "message.start",
+          "payload": {},
+          "seq": 1,
+          "session_id": "TEST-RUNTIME-SID-1"
+        },
+        {
+          "type": "message.delta",
+          "payload": {
+            "text": "PONG"
+          },
+          "seq": 2,
+          "session_id": "TEST-RUNTIME-SID-1"
+        },
+        {
+          "type": "message.complete",
+          "payload": {
+            "status": "complete",
+            "text": "PONG",
+            "usage": {
+              "prompt_tokens": 12,
+              "completion_tokens": 4,
+              "total_tokens": 16
+            }
+          },
+          "seq": 3,
+          "session_id": "TEST-RUNTIME-SID-1"
+        }
+      ]
+    }
+  }
+}

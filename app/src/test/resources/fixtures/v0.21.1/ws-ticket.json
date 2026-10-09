@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/auth/ws-ticket",
+    "headers": {
+      "Cookie": "hermes_session_at=<redacted-token>; hermes_session_provider=basic"
+    }
+  },
+  "response": {
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "ticket": "<redacted-ticket-token>",
+      "ttl_seconds": 30
+    }
+  }
+}

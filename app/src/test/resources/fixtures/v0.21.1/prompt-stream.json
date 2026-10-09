@@ -1,0 +1,117 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "req-prompt-submit",
+    "method": "prompt.submit",
+    "params": {
+      "session_id": "TEST-RUNTIME-SID-1",
+      "text": "Echo the single word: PONG"
+    }
+  },
+  "initial_rpc_response": {
+    "jsonrpc": "2.0",
+    "id": "req-prompt-submit",
+    "result": {
+      "status": "streaming"
+    }
+  },
+  "inbound_event_stream": [
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "type": "sessions.changed",
+        "payload": {}
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 1,
+        "type": "session.info",
+        "payload": {
+          "model": "<redacted-model>",
+          "lazy": false
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 2,
+        "type": "message.start",
+        "payload": {}
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 3,
+        "type": "status.update",
+        "payload": {
+          "status": "thinking"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 4,
+        "type": "session.title",
+        "payload": {
+          "title": "Echo PONG"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 5,
+        "type": "thinking.delta",
+        "payload": {
+          "text": "<redacted-thinking>"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 6,
+        "type": "message.delta",
+        "payload": {
+          "text": "PONG"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "event",
+      "params": {
+        "session_id": "TEST-RUNTIME-SID-1",
+        "seq": 7,
+        "type": "message.complete",
+        "payload": {
+          "status": "complete",
+          "text": "PONG",
+          "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 4,
+            "total_tokens": 16
+          }
+        }
+      }
+    }
+  ]
+}

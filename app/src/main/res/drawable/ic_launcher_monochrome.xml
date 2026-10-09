@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Original Relay Orbit monochrome adaptive icon for Android 13+ themed icons.
+    Provenance: Created as an original vector asset for Hermes Bot Android MVP (BLD-004).
+    Contains no Hermes Go, third-party, or copied brand assets.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft outer orbital track -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.3"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M32,68 C24,52 38,32 58,28 C76,24 88,40 82,58 C76,76 50,84 34,74" />
+
+    <!-- Active orbital relay stream connecting nodes -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.8"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M42,63 C48,46 60,38 67,42 C74,46 72,56 60,65 C48,74 38,70 41,63" />
+
+    <!-- Larger host message node (top-right) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M66,43m-11,0a11,11 0 1,1 22,0a11,11 0 1,1 -22,0" />
+    <path
+        android:fillColor="#000000"
+        android:fillAlpha="0.5"
+        android:pathData="M66,43m-5,0a5,5 0 1,1 10,0a5,5 0 1,1 -10,0" />
+
+    <!-- Smaller client message node (bottom-left) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M41,63m-7,0a7,7 0 1,1 14,0a7,7 0 1,1 -14,0" />
+    <path
+        android:fillColor="#000000"
+        android:fillAlpha="0.5"
+        android:pathData="M41,63m-3,0a3,3 0 1,1 6,0a3,3 0 1,1 -6,0" />
+
+    <!-- Signal pulse beacon indicator on client node -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M41,63m-1.5,0a1.5,1.5 0 1,1 3,0a1.5,1.5 0 1,1 -3,0" />
+</vector>

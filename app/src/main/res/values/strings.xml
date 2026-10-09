@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CHG-006-S2 (TASK-006): first app string resource. This app previously had
+     no values/strings.xml (app_name is a build.gradle resValue). -->
+<resources>
+    <string name="back_exit_warning">Press back again to exit</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_chats">Chat</string>
+    <string name="nav_work">Work</string>
+    <string name="nav_bots">Bots</string>
+    <string name="nav_bot">Bot</string>
+    <string name="bots_empty">No bots found</string>
+    <string name="bots_error">Could not load bots</string>
+    <string name="bots_retry">Retry</string>
+    <string name="bots_disconnected">Connect to Hermes to see your bots</string>
+</resources>

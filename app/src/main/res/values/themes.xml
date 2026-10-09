@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  App theme: pure Compose app with no system title/action bar.
+
+  Without an application-level theme, MainActivity fell back to the device
+  default theme, which drew a window title bar showing the app label
+  ("Hermes Mobile") on every screen. windowNoTitle/windowActionBar remove that
+  system-drawn bar; the Compose MaterialTheme surface then fills the window.
+-->
+<resources>
+    <style name="Theme.HermesBot" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

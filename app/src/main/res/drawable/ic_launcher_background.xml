@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Original Relay Orbit adaptive icon background.
+    Provenance: Created as an original vector asset for Hermes Bot Android MVP (BLD-004).
+    Contains no Hermes Go, third-party, or copied brand assets.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Deep dark surface canvas -->
+    <path
+        android:fillColor="#0E1218"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Subtle concentric orbital accent inside shield boundary -->
+    <path
+        android:strokeColor="#1E2836"
+        android:strokeWidth="1.5"
+        android:pathData="M54,18 A36,36 0 1,0 54,90 A36,36 0 1,0 54,18 Z" />
+</vector>

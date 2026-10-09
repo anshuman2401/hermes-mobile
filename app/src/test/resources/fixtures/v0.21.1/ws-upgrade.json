@@ -1,0 +1,27 @@
+{
+  "upgrade_request": {
+    "uri": "/api/ws",
+    "headers": {
+      "Upgrade": "websocket",
+      "Connection": "Upgrade",
+      "Sec-WebSocket-Key": "<redacted-key>",
+      "Sec-WebSocket-Version": "13",
+      "Sec-WebSocket-Protocol": "hermes-gateway-v1, hermes-gateway-ticket.<redacted-ticket>"
+    }
+  },
+  "upgrade_response": {
+    "status_code": 101,
+    "status_text": "Switching Protocols",
+    "headers": {
+      "Upgrade": "websocket",
+      "Connection": "Upgrade",
+      "Sec-WebSocket-Accept": "<redacted-accept>",
+      "Sec-WebSocket-Protocol": "hermes-gateway-v1"
+    }
+  },
+  "notes": {
+    "subprotocol_ticket_stripped": true,
+    "reflected_subprotocol": "hermes-gateway-v1",
+    "fallback_query_param_form": "/api/ws?ticket=<redacted-ticket>"
+  }
+}

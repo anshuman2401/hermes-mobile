@@ -1,0 +1,91 @@
+{
+  "source_commit": "476fa2c2897e1f6dcbb2b5982756e907b86e9578",
+  "source_branch": "pipeline-evidence",
+  "host_version": "v0.21.1",
+  "fixtures": [
+    {
+      "file": "auth-login-failure.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/auth-login-failure.json",
+      "sha256": "3973d9cf922665335474c18875286063e410767933a6a47a0d51e097bc2578eb",
+      "bytes": 439
+    },
+    {
+      "file": "auth-login-success.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/auth-login-success.json",
+      "sha256": "4d9f2ca1316f5736d26517ee147c29e694bbd09bf7f1e40eb168a5cd840bdde3",
+      "bytes": 719
+    },
+    {
+      "file": "gateway-capabilities.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/gateway-capabilities.json",
+      "sha256": "05d0ce0f46da4935959d1367c20b5a245763c84cafafb13216254ba41e469e12",
+      "bytes": 268
+    },
+    {
+      "file": "gateway-ready.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/gateway-ready.json",
+      "sha256": "b554c77b49c3f31380523373e9ff149ad59fda2405b8f2649fb2ce0c0b9be5d2",
+      "bytes": 302
+    },
+    {
+      "file": "prompt-stream.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/prompt-stream.json",
+      "sha256": "d19ddd19359165318dda6ec6791edc867acb48b5671e36727b3165292a8e47e4",
+      "bytes": 2401
+    },
+    {
+      "file": "reconnect.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/reconnect.json",
+      "sha256": "e2125b0de379b3d2c396c8f3bcf827148e7649541096a445d3a5cb86f893ae14",
+      "bytes": 1501
+    },
+    {
+      "file": "replay-since.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/replay-since.json",
+      "sha256": "77aec324c6687ede991e6f00d17cb3728ff556fc7e055f0867011e5e39a8e9a5",
+      "bytes": 1143
+    },
+    {
+      "file": "session-create.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/session-create.json",
+      "sha256": "0a9806bf55ec44929258b397944fc14fb6a2d109ea22b14929c1f1e8e478783f",
+      "bytes": 781
+    },
+    {
+      "file": "session-list.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/session-list.json",
+      "sha256": "617140c73c429a5b3bab7a7e591ba7c0a3ff26e2e54c04f21c6782c2f4073a5e",
+      "bytes": 779
+    },
+    {
+      "file": "session-resume.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/session-resume.json",
+      "sha256": "daad742b60b52dfc47b6367e82b64d9af6d55f7a7973c429dc03437901ae9f69",
+      "bytes": 1506
+    },
+    {
+      "file": "status-preflight.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/status-preflight.json",
+      "sha256": "08fbf8778c1415a7b2f35657bdf317c9df59cdce2e336c1837b952e00cf21ac4",
+      "bytes": 1115
+    },
+    {
+      "file": "tool-lifecycle.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/tool-lifecycle.json",
+      "sha256": "1e3c1536291dcb68127d4f96b364d026a9ff9dde905db8aa3a2c590ead600daf",
+      "bytes": 1834
+    },
+    {
+      "file": "ws-ticket.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/ws-ticket.json",
+      "sha256": "c65037e2c4cc53877642607d0d1a719f6ce6a105ad18d1bcffc72fef27994181",
+      "bytes": 384
+    },
+    {
+      "file": "ws-upgrade.json",
+      "original_path": "specs/test-evidence/host-contract/v0.21.1/fixtures/ws-upgrade.json",
+      "sha256": "9e9ba410629e60d8d955e9f3ae38240a9d4fef2cd8e74bbccfb5879d42395a7a",
+      "bytes": 771
+    }
+  ]
+}
