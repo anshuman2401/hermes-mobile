@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.hermes.bot"
+    namespace = "io.github.anshuman2401.hermesmobile"
     compileSdk { version = release(37) }
 
     defaultConfig {
         applicationId = "io.github.anshuman2401.hermesmobile"
-        testInstrumentationRunner = "com.hermes.bot.feature.chat.StreamProfileRunner"
+        testInstrumentationRunner = "io.github.anshuman2401.hermesmobile.feature.chat.StreamProfileRunner"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

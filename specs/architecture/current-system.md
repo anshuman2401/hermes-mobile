@@ -6,7 +6,7 @@ Documentation correction (2026-10-03): the chat-owner provider description below
 
 ## Product and platform boundary
 
-Hermes Mobile is a single-module native Kotlin/Jetpack Compose client (`:app`, Kotlin namespace `com.hermes.bot`, release application ID `io.github.anshuman2401.hermesmobile`). It targets Android 36, supports API 26+, and compiles with Java 21. The host owns agent execution, tools, credentials, durable sessions, and transcript truth. The phone owns presentation state, encrypted connection/auth/session-selection data, drafts, pending-turn evidence, and private redacted diagnostics.
+Hermes Mobile is a single-module native Kotlin/Jetpack Compose client (`:app`, namespace and release application ID `io.github.anshuman2401.hermesmobile`). It targets Android 36, supports API 26+, and compiles with Java 21. The host owns agent execution, tools, credentials, durable sessions, and transcript truth. The phone owns presentation state, encrypted connection/auth/session-selection data, drafts, pending-turn evidence, and private redacted diagnostics.
 
 The production graph is assembled in `bootstrap/AppContainer.kt`:
 

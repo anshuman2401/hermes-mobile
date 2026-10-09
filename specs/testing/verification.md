@@ -92,24 +92,24 @@ Choose selectors from the actual implementation, tests and directly affected con
 A bounded turn-coordination change can start with:
 
 ```bash
-./gradlew testDebugUnitTest --tests 'com.hermes.bot.data.turn.*' --stacktrace
+./gradlew testDebugUnitTest --tests 'io.github.anshuman2401.hermesmobile.data.turn.*' --stacktrace
 ```
 
 For assistant Markdown changes, this command includes formatting, interaction policy, structural consumers, copying, Unicode/bounds and the performance gate. Keep or extend the applicable selectors when new tests/consumers are added; an unrelated change does not need this suite.
 
 ```bash
 ./gradlew :app:testDebugUnitTest \
-  --tests 'com.hermes.bot.feature.chat.MarkdownParserTest' \
-  --tests 'com.hermes.bot.feature.chat.MarkdownRenderingRegressionTest' \
-  --tests 'com.hermes.bot.feature.chat.MarkdownStructureTest' \
-  --tests 'com.hermes.bot.feature.chat.CodeBlockBudgetTest' \
-  --tests 'com.hermes.bot.feature.chat.ExternalLinkPolicyTest' \
-  --tests 'com.hermes.bot.feature.chat.TranscriptCopyPolicyTest' \
-  --tests 'com.hermes.bot.feature.chat.markdown.ReplyFormatStyleContractTest' \
-  --tests 'com.hermes.bot.hardening.RenderingPerformanceAndBoundsTest' \
-  --tests 'com.hermes.bot.feature.chat.ChatUiPresentationSourceContractTest' \
-  --tests 'com.hermes.bot.feature.chat.components.CopyIconOnlySourceContractTest' \
-  --tests 'com.hermes.bot.design.ThemeAndContrastTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.MarkdownParserTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.MarkdownRenderingRegressionTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.MarkdownStructureTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.CodeBlockBudgetTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.ExternalLinkPolicyTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.TranscriptCopyPolicyTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.markdown.ReplyFormatStyleContractTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.hardening.RenderingPerformanceAndBoundsTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.ChatUiPresentationSourceContractTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.feature.chat.components.CopyIconOnlySourceContractTest' \
+  --tests 'io.github.anshuman2401.hermesmobile.design.ThemeAndContrastTest' \
   --console=plain --stacktrace
 ```
 
