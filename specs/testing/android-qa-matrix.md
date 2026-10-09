@@ -84,6 +84,12 @@ Deterministic: VoiceProtocolTest, VoiceCoordinatorTest, VoiceDictationTest cover
 
 Exact-APK manual/device checklist: permission grant/denial/permanent denial/settings; actual microphone capture; Stop/Cancel and two-minute cap; configured host transcription, silence and unavailable/unconfigured host; editable appended draft and explicit Send; attachments preserved; Back cancels before navigating; background/rotation/route exit release microphone and discard work; keyboard, narrow screen, large fonts and themes. Retain only synthetic evidence. Device and deployed-host checks remain NOT RUN until separately executed.
 
+## Work Files path and visibility acceptance
+
+Deterministic: `ManagedFilesViewModelTest`, `ManagedFileListingParserTest`, `ManagedFileProtocolAdapterTest`, Work navigation and rendering-bounds suites cover direct path validation and host capability, locked-root containment, unchanged listing after failed navigation, dot-name filtering without changing the host listing or order, and owner reset.
+
+Exact-APK manual/device checklist (NOT RUN): in Work → Files, enter a permitted absolute folder path with Go and keyboard submit; confirm Up and Back still follow the host parent. Try malformed, missing, denied and locked-root-outside paths and confirm the old list remains with an inline error. Check a host with path changes disabled. Toggle Hide hidden files in folders containing dot folders/files, check visible counts and the filtered-empty message, then switch sections and connection owners. Check loading/offline/error states, long paths, keyboard, narrow width, large font and both themes using synthetic names. Device and deployed-host behavior are separate from the JVM verifier.
+
 ## Conversation files acceptance
 
 Deterministic: ConversationFilesTest, FileProtocolTest, ConversationFilesControllerTest, FilePreviewPolicyTest and ChatViewModelTest cover explicit assistant/tool discovery, loaded-history bounds, duplicate reply associations, authenticated session/profile routing, cookie succession, redirects, decompressed download caps, timeout/cancellation, stale owners, export ownership and preview limits.

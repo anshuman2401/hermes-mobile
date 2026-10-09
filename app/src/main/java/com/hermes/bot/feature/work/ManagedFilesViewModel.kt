@@ -25,8 +25,13 @@ data class ManagedFilesState(
     val online: Boolean = false,
     val preview: ManagedFilePreview? = null,
     val conflictName: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val pathError: String? = null,
+    val hideHiddenFiles: Boolean = false
 ) {
+    val visibleEntries: List<ManagedFileEntry>
+        get() = listing?.entries?.filter { !hideHiddenFiles || !it.name.startsWith('.') }.orEmpty()
+
     override fun toString() = "ManagedFilesState([redacted])"
 }
 
@@ -45,7 +50,7 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
             mutable.value = ManagedFilesState(online = online)
         } else if (!online && mutable.value.online) {
             invalidate()
-            mutable.value = ManagedFilesState(online = false)
+            mutable.value = ManagedFilesState(online = false, hideHiddenFiles = mutable.value.hideHiddenFiles)
         } else mutable.value = mutable.value.copy(online = online)
     }
 
@@ -56,19 +61,40 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
     fun pageStopped() {
         invalidate()
         mutable.value = mutable.value.copy(loading = false, busy = false, preview = null,
-            conflictName = null, message = null)
+            conflictName = null, message = null, pathError = null)
     }
 
     fun refresh() = load(mutable.value.listing?.path)
 
-    private fun load(path: String?) {
+    fun setHideHiddenFiles(hide: Boolean) {
+        mutable.value = mutable.value.copy(hideHiddenFiles = hide)
+    }
+
+    fun clearPathError() {
+        if (mutable.value.pathError != null) mutable.value = mutable.value.copy(pathError = null)
+    }
+
+    fun openPath(input: String) {
+        val current = mutable.value
+        val listing = current.listing ?: return
+        if (!current.online || current.loading || current.busy || current.preview != null || !listing.canChangePath) return
+        val path = input.trim()
+        if (!ManagedFilePaths.validPath(path) ||
+            listing.lockedRoot?.let { !ManagedFilePaths.within(path, it) } == true) {
+            mutable.value = current.copy(pathError = "Enter an allowed absolute folder path.")
+            return
+        }
+        load(path, direct = true)
+    }
+
+    private fun load(path: String?, direct: Boolean = false) {
         if (!mutable.value.online) {
             mutable.value = mutable.value.copy(message = "Reconnect to browse Hermes files.")
             return
         }
         invalidate()
         val token = generation
-        mutable.value = mutable.value.copy(loading = true, busy = false, message = null)
+        mutable.value = mutable.value.copy(loading = true, busy = false, message = null, pathError = null)
         request = viewModelScope.launch {
             try {
                 val listing = repository.list(path)
@@ -76,7 +102,8 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 if (token == generation) mutable.value = mutable.value.copy(loading = false,
-                    message = failure.messageForFiles())
+                    message = if (direct) null else failure.messageForFiles(),
+                    pathError = if (direct) "Folder could not be opened. Current folder is unchanged." else null)
             }
         }
     }
@@ -95,7 +122,7 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
     fun back(): Boolean {
         if (mutable.value.preview != null) {
             mutable.value.preview?.discard()
-            mutable.value = mutable.value.copy(preview = null, message = null)
+            mutable.value = mutable.value.copy(preview = null, message = null, pathError = null)
             return true
         }
         if (mutable.value.busy) { invalidate(); mutable.value = mutable.value.copy(busy = false, conflictName = null); return true }
@@ -112,7 +139,7 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
         }
         invalidate()
         val token = generation
-        mutable.value = mutable.value.copy(busy = true, message = null)
+        mutable.value = mutable.value.copy(busy = true, message = null, pathError = null)
         request = viewModelScope.launch {
             var result: ManagedDownload? = null
             try {
@@ -138,7 +165,7 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
         invalidate()
         pending = if (overwrite) null else source
         val token = generation
-        mutable.value = mutable.value.copy(busy = true, conflictName = null, message = null)
+        mutable.value = mutable.value.copy(busy = true, conflictName = null, message = null, pathError = null)
         request = viewModelScope.launch {
             try {
                 repository.upload(directory, source, overwrite)
@@ -167,7 +194,7 @@ class ManagedFilesViewModel(private val repository: ManagedFileRepository) : Vie
         if (!admitted(entry) || !mutable.value.online || mutable.value.busy) return
         invalidate()
         val token = generation
-        mutable.value = mutable.value.copy(busy = true, message = null)
+        mutable.value = mutable.value.copy(busy = true, message = null, pathError = null)
         request = viewModelScope.launch {
             var result: ManagedDownload? = null
             try {

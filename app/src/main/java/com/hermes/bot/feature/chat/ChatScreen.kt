@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -688,7 +689,7 @@ fun ChatScreen(
 
     Scaffold(
         bottomBar = {
-            BoxWithConstraints {
+            BoxWithConstraints(modifier = Modifier.imePadding()) {
                 // Leave room for the editable draft, caption row and Back header at large fonts.
                 val approvalHeight = maxHeight * 0.35f
                 val editScroll = rememberScrollState()
