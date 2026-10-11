@@ -917,6 +917,10 @@ fun ChatScreen(
                     }
                 }
             }
+            if (uiState?.isCachedHistoryPreview == true && uiState.isHistoryReadInFlight) {
+                Text("Syncing", style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            }
             if ((recoveryState == com.hermes.bot.feature.connect.ConnectState.PREFLIGHT_LOADING ||
                 uiState?.showHistoryLoading == true) && uiState?.isCachedHistoryPreview != true) {
                 androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

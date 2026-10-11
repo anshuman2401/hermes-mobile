@@ -72,6 +72,33 @@ class EncryptedVault(
 
     private val mutex = Mutex()
     private val loginGeneration = java.util.concurrent.atomic.AtomicLong()
+    private val conversationCacheReadGeneration = java.util.concurrent.atomic.AtomicLong()
+
+    // Lock order: vault mutex -> preview gate -> repository memory lock. No IO under this gate.
+    private val previewGate = Any()
+    private var previewGeneration = 0L
+    private var previewAuthority: ConversationCacheReadOwner? = null
+    private val previewObservers = mutableSetOf<() -> Unit>()
+
+    private fun invalidatePreviewAuthority() = synchronized(previewGate) {
+        previewGeneration++
+        previewAuthority = null
+        previewObservers.toList().forEach { it() }
+    }
+
+    override fun observeConversationPreviewInvalidation(observer: () -> Unit): () -> Unit {
+        synchronized(previewGate) { previewObservers.add(observer) }
+        return fun() { synchronized(previewGate) { previewObservers.remove(observer) } }
+    }
+
+    override fun withConversationPreviewOwner(owner: ConversationCacheReadOwner, publish: () -> Unit): Boolean =
+        synchronized(previewGate) {
+            val active = previewAuthority
+            if (active == null || owner.previewGeneration != previewGeneration ||
+                owner.loginGeneration != loginGeneration.get() || owner.cacheGeneration != conversationCacheReadGeneration.get() ||
+                active.partition != owner.partition || active.selectedContext != owner.selectedContext) false
+            else { publish(); true }
+        }
 
     // Separate, origin-bound local authority. A tombstone prevents legacy resurrection.
     private class LocalLogin(val origin: String, val epoch: String, val username: String?,
@@ -102,6 +129,7 @@ class EncryptedVault(
         directorySync(storageDir)
     }
     private fun revokeLocalLogin(id: String, origin: String) {
+        invalidatePreviewAuthority()
         loginGeneration.incrementAndGet()
         writeLocalLogin(id, LocalLogin(origin, "", null, null, null, false))
     }
@@ -117,7 +145,7 @@ class EncryptedVault(
         loginGeneration.get() == owner.generation && activeAuthProfileInternal() == owner.profileId &&
             readCacheAccessStateInternal(owner.profileId, owner.origin)?.cacheEpoch == owner.authEpoch
 
-    override fun invalidateLoginOwners() { loginGeneration.incrementAndGet() }
+    override fun invalidateLoginOwners() { invalidatePreviewAuthority(); loginGeneration.incrementAndGet() }
 
     override suspend fun captureLoginOwner(origin: String): LoginOwner? = mutex.withLock {
         withContext(ioDispatcher) {
@@ -146,6 +174,7 @@ class EncryptedVault(
     }
     override suspend fun commitRememberedLogin(owner: LoginOwner, credential: AuthCredential,
         username: String, password: CharArray): Boolean = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             if (!loginOwnerCurrent(owner) || credential.canonicalOrigin != owner.origin) return@withContext false
             require(username.length <= 4096 && password.size <= 4096)
@@ -175,6 +204,7 @@ class EncryptedVault(
         }
     }
     override suspend fun prepareLocalLogin(origin: String): Boolean = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val id = activeAuthProfileInternal() ?: return@withContext false
@@ -648,6 +678,7 @@ class EncryptedVault(
     }
 
     override suspend fun saveConnectionProfile(profile: ConnectionProfile): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             // PR-1 REQ-07: purge-before-mutation — an origin change destroys the
@@ -674,6 +705,7 @@ class EncryptedVault(
     }
 
     override suspend fun deleteConnectionProfile(localId: String): Boolean = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val index = readProfileIndexInternal() ?: return@withContext false
@@ -706,6 +738,7 @@ class EncryptedVault(
     }
 
     override suspend fun clearConnectionProfile(localId: String?): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val targetId = localId ?: readProfileIndexInternal()?.activeProfileId ?: return@withContext
@@ -737,6 +770,7 @@ class EncryptedVault(
     }
 
     override suspend fun setActiveProfileId(localId: String): Boolean = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val index = readProfileIndexInternal() ?: return@withContext false
@@ -824,6 +858,7 @@ class EncryptedVault(
         generation: Long,
         generationGate: ConnectionProfileGenerationGate
     ): ProfileCommitResult = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             // PR-1 REQ-07: stale commit attempts never reach staging or purge.
@@ -1028,6 +1063,7 @@ class EncryptedVault(
             if (!clear && replacement?.canonicalOrigin != lease.origin) {
                 return@withContext AuthCredentialMutationResult.Failed
             }
+            if (clear || !localLoginFile(lease.profileLocalId).exists()) invalidatePreviewAuthority()
             val owner = AuthOwner(lease.profileLocalId, lease.origin)
             val successor = if (clear) null else mintSecureCacheEpoch()
             deniedAuthEpochs[owner] = DeniedAuthEpochs(lease.epoch, successor)
@@ -1055,6 +1091,7 @@ class EncryptedVault(
                 deniedAuthEpochs.remove(owner)
                 accepted
             } catch (exception: Exception) {
+                invalidatePreviewAuthority()
                 if (successorAttempted) {
                     // One bounded restoration; its failure never clears process denial
                     // or replaces the original failure. D0/DU are restart limitations.
@@ -1082,6 +1119,7 @@ class EncryptedVault(
     }
 
     override suspend fun saveAuthCredential(credential: AuthCredential, profileLocalId: String?): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val index = readProfileIndexInternal()
@@ -1106,6 +1144,7 @@ class EncryptedVault(
         // unconditional — REQ-01, independent of the choice).
         cacheChoice: SignOutCacheChoice
     ): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val index = readProfileIndexInternal()
@@ -3620,6 +3659,66 @@ class EncryptedVault(
 
     // --- PR-3 public surface (defaults live on VaultStorage) ---
 
+    override suspend fun captureConversationCacheReadOwner(): ConversationCacheReadOwner? = mutex.withLock {
+        try { withContext(ioDispatcher) {
+            ensureMigrated()
+            val selection = selectedContextAuthorityInternal()
+            if (selection !is SelectedContextReadResult.Selected && selection != SelectedContextReadResult.Absent) {
+                invalidatePreviewAuthority()
+                return@withContext null
+            }
+            val partition = (resolveAccessPartitionInternal() as? CacheAccessPartitionResult.Available)?.partition
+                ?: run { invalidatePreviewAuthority(); return@withContext null }
+            synchronized(previewGate) {
+                ConversationCacheReadOwner(partition, (selection as? SelectedContextReadResult.Selected)?.name,
+                    loginGeneration.get(), conversationCacheReadGeneration.get(), previewGeneration)
+                    .also { previewAuthority = it }
+            }
+        } } catch (failure: Exception) {
+            invalidatePreviewAuthority()
+            throw failure
+        }
+    }
+
+    private fun conversationCacheReadOwnerCurrent(owner: ConversationCacheReadOwner): Boolean {
+        fun generationCurrent() = synchronized(previewGate) { owner.previewGeneration == previewGeneration } &&
+            owner.loginGeneration == loginGeneration.get() &&
+            owner.cacheGeneration == conversationCacheReadGeneration.get()
+        if (!generationCurrent()) return false
+        val selection = selectedContextAuthorityInternal()
+        val selected = when (selection) {
+            is SelectedContextReadResult.Selected -> selection.name
+            SelectedContextReadResult.Absent -> null
+            else -> return false
+        }
+        return selected == owner.selectedContext &&
+            (resolveAccessPartitionInternal() as? CacheAccessPartitionResult.Available)?.partition == owner.partition &&
+            generationCurrent()
+    }
+
+    override suspend fun isConversationCacheReadOwnerCurrent(owner: ConversationCacheReadOwner): Boolean = mutex.withLock {
+        withContext(ioDispatcher) {
+            conversationCacheReadOwnerCurrent(owner).also { if (!it) invalidatePreviewAuthority() }
+        }
+    }
+
+    override suspend fun readConversationSnapshotForOwner(
+        storedSessionId: String, owner: ConversationCacheReadOwner
+    ): CacheReadResult<ConversationCacheV2> = mutex.withLock {
+        withContext(ioDispatcher) {
+            ensureMigrated()
+            if (!conversationCacheReadOwnerCurrent(owner)) {
+                invalidatePreviewAuthority()
+                return@withContext CacheReadResult.Unavailable
+            }
+            val read = readConversationRecordInternal(owner.partition, storedSessionId, wallClockMillis())
+            // Profile/selection/cache mutations share this mutex. Only the external
+            // cancellation of login owners can interleave with this disk read.
+            if (owner.loginGeneration == loginGeneration.get() &&
+                owner.cacheGeneration == conversationCacheReadGeneration.get()) read else CacheReadResult.Unavailable
+        }
+    }
+
     override suspend fun readConversationSnapshot(
         partition: CacheAccessPartition,
         storedSessionId: String,
@@ -3846,12 +3945,14 @@ class EncryptedVault(
         partition: CacheAccessPartition,
         storedSessionId: String
     ): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             deleteConversationSnapshotInternal(partition, storedSessionId)
         }
     }
 
     override suspend fun runConversationCacheRecovery(): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             runConversationCacheRecoveryBestEffort()
@@ -3862,12 +3963,16 @@ class EncryptedVault(
         profileLocalId: String,
         originSha256: String
     ): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
+        conversationCacheReadGeneration.incrementAndGet()
         withContext(ioDispatcher) {
             purgeConversationCacheInternal(profileLocalId, originSha256)
         }
     }
 
     override suspend fun clearConversationCache(): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
+        conversationCacheReadGeneration.incrementAndGet()
         withContext(ioDispatcher) {
             clearConversationCacheInternal()
         }
@@ -3905,6 +4010,8 @@ class EncryptedVault(
      * diagnostics vocabulary (OQ-02).
      */
     override suspend fun clearAllCacheRecords(): CacheClearResult = mutex.withLock {
+        invalidatePreviewAuthority()
+        conversationCacheReadGeneration.incrementAndGet()
         withContext(ioDispatcher) {
             var phase = CacheClearResiduePhase.CONVERSATION_CACHE
             try {
@@ -3962,6 +4069,7 @@ class EncryptedVault(
     override suspend fun clearCache(): CacheClearResult = clearAllCacheRecords()
 
     override suspend fun clearCredentials(): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             ensureMigrated()
             val index = readProfileIndexInternal()
@@ -3974,6 +4082,7 @@ class EncryptedVault(
     }
 
     override suspend fun clearAll(): CacheClearResult = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             try {
                 loginGeneration.incrementAndGet()
@@ -4021,7 +4130,13 @@ class EncryptedVault(
         }
     }
 
-    private fun selectedContextAuthorityInternal(): SelectedContextReadResult {
+    private fun selectedContextAuthorityInternal(): SelectedContextReadResult =
+        readSelectedContextAuthorityInternal().also {
+            if (it == SelectedContextReadResult.Unreadable || it == SelectedContextReadResult.Failed)
+                invalidatePreviewAuthority()
+        }
+
+    private fun readSelectedContextAuthorityInternal(): SelectedContextReadResult {
         return try {
             val attributes = try {
                 Files.readAttributes(contextProfileSelectionFile.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
@@ -4062,6 +4177,7 @@ class EncryptedVault(
     override suspend fun clearSelectedContextProfileIfCurrent(
         expectedLease: AuthCredentialLease, expectedContext: String
     ): WorkspaceClearResult = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             val selection = selectedContextAuthorityInternal()
             if (selection == SelectedContextReadResult.Failed || selection == SelectedContextReadResult.Unreadable)
@@ -4084,6 +4200,10 @@ class EncryptedVault(
     }
 
     private fun readSelectedContextProfileInternal(): String? {
+        val authority = selectedContextAuthorityInternal()
+        if (authority is SelectedContextReadResult.Selected) return authority.name
+        if (authority == SelectedContextReadResult.Absent) return null
+        invalidatePreviewAuthority()
         val aad = createAad("CONTEXT_PROFILE_SELECTION", ContextProfileSelection.CURRENT_SCHEMA_VERSION, "singleton_context_profile_selection")
         val jsonStr = readEncryptedSingleton(contextProfileSelectionFile, aad) ?: return null
         val obj = GatewayJson.parseOrNull(jsonStr)?.asObjectOrNull() ?: return null
@@ -4093,6 +4213,7 @@ class EncryptedVault(
     }
 
     override suspend fun saveSelectedContextProfile(name: String): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             val selection = ContextProfileSelection(selectedProfileName = name)
             val map = linkedMapOf<String, Any?>(
@@ -4106,6 +4227,7 @@ class EncryptedVault(
     }
 
     override suspend fun clearSelectedContextProfile(): Unit = mutex.withLock {
+        invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             contextProfileSelectionFile.delete()
         }

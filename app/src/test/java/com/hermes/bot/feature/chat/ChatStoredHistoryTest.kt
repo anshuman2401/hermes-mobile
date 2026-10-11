@@ -490,6 +490,7 @@ internal class StoredChatFixture(folder: File, private val dispatcher: Coroutine
     var metadata = "\"running\":false,\"status\":\"idle\""
     var body = storedBody()
     var cookie = false
+    var cookieValue = "synthetic-rotated"
     var bodyGate: CompletableDeferred<Unit>? = null
     var bodyEntered: CompletableDeferred<Unit>? = null
     var nonCooperativeBody = false
@@ -505,7 +506,7 @@ internal class StoredChatFixture(folder: File, private val dispatcher: Coroutine
                 override fun cancel() {}
                 override suspend fun awaitHeaders(): StoredHistoryResponse = object : StoredHistoryResponse {
                     override val statusCode = 200
-                    override val headers = if (cookie) mapOf("Set-Cookie" to listOf("session=synthetic-rotated; Path=/")) else emptyMap()
+                    override val headers = if (cookie) mapOf("Set-Cookie" to listOf("session=$cookieValue; Path=/")) else emptyMap()
                     override suspend fun readBoundedBody(): ByteArray {
                         bodyEntered?.complete(Unit)
                         if (nonCooperativeBody) withContext(NonCancellable) { bodyGate?.await() }
@@ -544,8 +545,10 @@ internal class StoredChatFixture(folder: File, private val dispatcher: Coroutine
         profile, "synthetic-session", 11, 17).getOrThrow()
     fun resumeBody() = """{"session_id":"synthetic-runtime","stored_session_id":"synthetic-session","message_count":3,"messages":[{"role":"user","content":"Synthetic compact question"},{"role":"tool","content":"SYNTHETIC_PRIVATE_COMPACT_OUTPUT","name":"terminal","context":"SYNTHETIC_PRIVATE_COMPACT_ARGUMENT"},{"role":"assistant","content":"Synthetic compact answer"}]${if (metadata.isEmpty()) "" else ",$metadata"}}"""
     fun vm(storage: VaultStorage = vault, repo: com.hermes.bot.data.session.SessionRepository = repository,
-        cacheRepository: com.hermes.bot.data.cache.ConversationCacheRepository = cache): ChatViewModel = ChatViewModel("synthetic-session", sessionRepository = repo,
-        gatewayProtocolAdapter = gateway, vaultStorage = storage, conversationCacheRepository = cacheRepository).also {
+        cacheRepository: com.hermes.bot.data.cache.ConversationCacheRepository = cache,
+        previewRepository: ChatPreviewRepository? = null): ChatViewModel = ChatViewModel("synthetic-session", sessionRepository = repo,
+        gatewayProtocolAdapter = gateway, vaultStorage = storage, conversationCacheRepository = cacheRepository,
+        chatPreviewRepository = previewRepository).also {
         vmJobs.add(it.viewModelScope.coroutineContext[Job]!!)
         store.put("synthetic-${vmCount++}", it)
     }

@@ -196,6 +196,8 @@ class DefaultAppContainer(
 
     // PR-3: offline conversation snapshot cache over the same vault partition
     // (shares vaultStorage, so profile/origin purge/reset cover it by layout).
+    private val chatPreviewRepository by lazy { com.hermes.bot.feature.chat.ChatPreviewRepository(vaultStorage) }
+
     override val conversationCacheRepository: ConversationCacheRepository by lazy {
         VaultConversationCacheRepository(vaultStorage = vaultStorage)
     }
@@ -358,6 +360,7 @@ class DefaultAppContainer(
             initialTitle = initialTitle,
             pendingInterruptQueue = pendingInterruptQueue,
             conversationCacheRepository = conversationCacheRepository,
+            chatPreviewRepository = chatPreviewRepository,
             photoAttachmentReader = ContentResolverPhotoAttachmentReader { context.contentResolver },
             documentAttachmentReader = ContentResolverDocumentAttachmentReader { context.contentResolver },
             slashCommands = com.hermes.bot.data.commands.DefaultSlashCommandRepository(gatewayAdapter, sessionRepository),
