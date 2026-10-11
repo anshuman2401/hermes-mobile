@@ -11,6 +11,9 @@ import com.hermes.bot.data.local.ToolStatus
 import com.hermes.bot.data.local.ToolTraceSourceType
 import com.hermes.bot.data.local.AuthCredentialLease
 import com.hermes.bot.data.local.VaultStorage
+import com.hermes.bot.data.local.WorkspaceRecoveryOwner
+import com.hermes.bot.data.local.WorkspaceRecoveryOwnerResult
+import com.hermes.bot.data.local.SelectedContextReadResult
 import com.hermes.bot.data.gateway.GatewayEvent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -90,6 +93,10 @@ sealed interface ConversationCacheWriteResult {
 interface ConversationCacheRepository {
     suspend fun load(storedSessionId: String): ConversationCacheReadResult
 
+    /** Captures known selection (including authoritative absence), never an unreadable default. */
+    suspend fun captureReadOwner(): WorkspaceRecoveryOwner? = null
+    suspend fun isReadOwnerCurrent(owner: WorkspaceRecoveryOwner): Boolean = false
+
     suspend fun replaceRemoteSnapshot(
         storedSessionId: String,
         resume: SessionResumeResult,
@@ -133,6 +140,23 @@ interface ConversationCacheRepository {
 class VaultConversationCacheRepository(
     private val vaultStorage: VaultStorage
 ) : ConversationCacheRepository {
+
+    override suspend fun captureReadOwner(): WorkspaceRecoveryOwner? =
+        (vaultStorage.captureWorkspaceRecoveryOwner() as? WorkspaceRecoveryOwnerResult.Captured)?.owner
+
+    override suspend fun isReadOwnerCurrent(owner: WorkspaceRecoveryOwner): Boolean {
+        val actual = captureReadOwner() ?: return false
+        val expectedLease = owner.lease
+        val actualLease = actual.lease
+        val sameSelection = when (val selection = owner.selection) {
+            is SelectedContextReadResult.Selected -> (actual.selection as? SelectedContextReadResult.Selected)?.name == selection.name
+            SelectedContextReadResult.Absent -> actual.selection == SelectedContextReadResult.Absent
+            else -> false
+        }
+        return sameSelection && actualLease.profileLocalId == expectedLease.profileLocalId &&
+            actualLease.origin == expectedLease.origin && actualLease.epoch == expectedLease.epoch &&
+            actualLease.credential == expectedLease.credential && actualLease.cacheEpoch == expectedLease.cacheEpoch
+    }
 
     override suspend fun load(storedSessionId: String): ConversationCacheReadResult =
         loadInternal(storedSessionId, null, null)

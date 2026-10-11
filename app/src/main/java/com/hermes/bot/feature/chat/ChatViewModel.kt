@@ -1971,6 +1971,12 @@ class ChatViewModel(
             ) {
                 return@launch
             }
+            // Capture known selection before legacy nullable readers can recover a damaged record.
+            val previewOwner = try {
+                if (!manual && !recovery && _uiState.value.timeline.isEmpty() && currentStatus == ConnectionStatus.CONNECTED)
+                    conversationCacheRepository?.captureReadOwner() else null
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
             val scope = try { captureHistoryScope(repo, generation) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
@@ -1982,32 +1988,35 @@ class ChatViewModel(
                 return@launch
             }
             if (historyDisposed || generation != historyGeneration) return@launch
+            // This child belongs to the host read, including the legacy default-selection lane.
+            val preview = launch preview@ {
+                try {
+                    if (manual || recovery || _uiState.value.timeline.isNotEmpty() ||
+                        gatewayProtocolAdapter?.connectionStatus?.value != ConnectionStatus.CONNECTED) return@preview
+                    fun previewCurrent() = !historyDisposed && generation == historyGeneration &&
+                        _uiState.value.isInitialLoading && admittedSocket == gatewayProtocolAdapter?.connectionGeneration &&
+                        gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED
+                    if (scope != null) {
+                        val previewBudget = StoredHistoryBudget(scope)
+                        serveConversationSnapshotIfPresent(sessionId, scope.lease, scope.selectedContext, preview = true) {
+                            previewCurrent() && scope.current && repo.isStoredHistoryPublicationCurrent(scope, previewBudget) &&
+                                previewCurrent() && scope.current
+                        }
+                    } else {
+                        val cache = conversationCacheRepository ?: return@preview
+                        val owner = previewOwner ?: return@preview
+                        val selected = (owner.selection as? com.hermes.bot.data.local.SelectedContextReadResult.Selected)?.name
+                        serveConversationSnapshotIfPresent(sessionId, owner.lease, selected, preview = true) {
+                            previewCurrent() && cache.isReadOwnerCurrent(owner) && previewCurrent()
+                        }
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { /* Cache failures never cancel the host read. */ }
+            }
             if (scope != null) {
-                coroutineScope {
-                    // Cache and host reads are siblings. A late cache cannot replace any host publication.
-                    val preview = launch {
-                        try {
-                            if (!manual && !recovery && _uiState.value.timeline.isEmpty() &&
-                                gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED) {
-                                val previewBudget = StoredHistoryBudget(scope)
-                                serveConversationSnapshotIfPresent(sessionId, scope.lease, scope.selectedContext,
-                                    preview = true) {
-                                    !historyDisposed && generation == historyGeneration && scope.current &&
-                                        _uiState.value.isInitialLoading && repo.isStoredHistoryPublicationCurrent(scope, previewBudget) &&
-                                        !historyDisposed && generation == historyGeneration && _uiState.value.isInitialLoading &&
-                                        admittedSocket == gatewayProtocolAdapter?.connectionGeneration &&
-                                        gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED
-                                }
-                            }
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { /* Cache failures never cancel the host read. */ }
-                    }
-                    try {
-                        openActiveHistory(repo, scope, generation, previousScope, previousSocketGeneration, recovery || manual, manual, admittedSocket)
-                    } finally {
-                        preview.cancel()
-                    }
-                }
+                try {
+                    openActiveHistory(repo, scope, generation, previousScope, previousSocketGeneration, recovery || manual, manual, admittedSocket)
+                } finally { preview.cancel() }
                 return@launch
             }
             val resumeResult = try { repo.resumeSession(sessionId) }
@@ -2015,7 +2024,7 @@ class ChatViewModel(
             catch (_: Exception) { Result.failure(IllegalStateException("Couldn't load conversation")) }
             suspend fun current(requireConnection: Boolean = true): Boolean =
                 !historyDisposed && generation == historyGeneration
-            if (!current()) return@launch
+            if (!current()) { preview.cancel(); return@launch }
             resumeResult.onSuccess { data ->
                 // CHG-005-S2 (TASK-004/005, RISK-003) + CHG-005-S3 (TASK-010, SEC-001):
                 // map ONLY entries with a non-blank body to timeline rows; blank-body
@@ -2176,6 +2185,7 @@ class ChatViewModel(
                     )
                 }
             }
+            preview.cancel()
         }
         historyLoadJob = read
         read.invokeOnCompletion { failure ->
