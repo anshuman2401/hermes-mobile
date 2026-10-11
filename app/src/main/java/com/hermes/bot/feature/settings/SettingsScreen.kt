@@ -172,12 +172,15 @@ fun SettingsScreen(
                 SettingsRowDivider()
                 SettingsRow("App logs", "Events recorded on this device", R.drawable.ic_settings_diagnostics, onClick = onOpenDiagnostics)
             }
-            Row(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.FavoriteBorder, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Built for your own space.", Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Hermes · ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelSmall,
+            Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.FavoriteBorder, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Built for your own space.", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text("Hermes Mobile · ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
