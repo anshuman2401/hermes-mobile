@@ -154,14 +154,14 @@ fun ContextUsageBottomSheet(
                 }
                 Button(onClick = onCompress, enabled = state.canCompressContext,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
-                    if (state.compressionPhase == CompressionPhase.REQUESTING) {
+                    if (state.compressionPhase == CompressionPhase.REQUESTING && !state.queueEnabled) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (state.compressionPhase == CompressionPhase.REQUESTING) "Compressing…" else "Compress context")
+                    Text(if (state.queueEnabled) "Queue compression" else if (state.compressionPhase == CompressionPhase.REQUESTING) "Compressing…" else "Compress context")
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(state.compressionNotice ?: "Available when the conversation is idle",
+                    Text(state.compressionNotice ?: if (state.queueEnabled) "Runs in order after earlier queued requests" else "Available when the conversation is idle",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
                     if (state.compressionNotice != null && !state.isCompressionBusy) {

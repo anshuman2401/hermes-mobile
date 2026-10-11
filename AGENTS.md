@@ -4,6 +4,7 @@ This file is the repository's single contributor-facing engineering rulebook. Re
 
 ## Scope and workflow
 
+- Hermes Mobile is the primary app and the default target for future feature work. Hermes Bot Android is reference-only unless the maintainer explicitly requests work there; leave its existing branches and commits unmerged.
 - Work on this Android repository only. Inspect compatible host contracts as needed, but do not change host infrastructure as part of an Android contribution. Keep the native app design original and respect third-party licenses and marks.
 - Fetch `origin/main`, inspect its current code and this file, and make changes on an isolated task branch or worktree. Do not overwrite another checkout's work. Recheck integration before proposing a merge.
 - Keep each change bounded. Inspect definitions, call sites, affected consumers, test fakes, and relevant contracts before editing. Record protocol, security, persistence, ownership, retry, and migration decisions with the change.

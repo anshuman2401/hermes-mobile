@@ -103,6 +103,7 @@ fun ChatComposer(
     onRemoveImage: ((String) -> Unit)? = null,
     onRemoveFile: ((String) -> Unit)? = null,
     onStopStreaming: () -> Unit = {},
+    queueEnabled: Boolean = false,
     // Presentation-only seam for the future attachment flow. The default keeps
     // the affordance visible but inert until attachment behavior is planned.
     onAttachmentClick: (() -> Unit)? = null,
@@ -131,7 +132,7 @@ fun ChatComposer(
     // S3 single flight: streaming gates Send/IME Send exactly like submitting.
     // The explicit flag (when provided) is authoritative; the fallback keeps
     // standalone previews and legacy callers working unchanged.
-    val showStop = isStreaming && !isSlashCommand && edit == null
+    val showStop = isStreaming && !isSlashCommand && edit == null && !queueEnabled
     val canSend = isComposerReady ?: (
         !voice.isBusy &&
         (draftText.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()) &&
@@ -266,6 +267,9 @@ fun ChatComposer(
             }
         }
 
+        if (queueEnabled && isStreaming && edit == null) {
+            TextButton(onClick = onStopStreaming) { Text("Stop generating") }
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -403,6 +407,7 @@ fun ChatComposer(
                     .semantics {
                         contentDescription = when {
                             showStop -> "Stop generating"
+                            queueEnabled -> "Add to queue"
                             isSubmitting -> "Sending prompt..."
                             isSendBlocked -> "Send prompt. Session needs to be restored."
                             else -> "Send prompt"
@@ -421,7 +426,7 @@ fun ChatComposer(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isSubmitting) {
+                    if (isSubmitting && !queueEnabled) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,

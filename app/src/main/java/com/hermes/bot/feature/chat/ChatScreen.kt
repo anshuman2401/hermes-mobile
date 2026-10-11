@@ -263,6 +263,7 @@ fun ChatScreen(
         }
     }
     var showModelPicker by remember(sessionId) { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = uiState?.queue?.edit != null) { viewModel?.finishQueuedEdit(false) }
     androidx.activity.compose.BackHandler(enabled = uiState?.edit != null) { viewModel?.cancelMessageEdit() }
     androidx.activity.compose.BackHandler(enabled = uiState?.slashMenuVisible == true) { viewModel?.dismissSlashSuggestions() }
     androidx.activity.compose.BackHandler(enabled = uiState?.voice?.isBusy == true) { viewModel?.cancelDictation() }
@@ -327,13 +328,14 @@ fun ChatScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(viewModel, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) { viewModel?.setSubagentVisibility(true); viewModel?.setApprovalVisibility(true) }
-            if (event == Lifecycle.Event.ON_STOP) { fileController?.background(); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
+            if (event == Lifecycle.Event.ON_START) { viewModel?.setQueueVisibility(true); viewModel?.setSubagentVisibility(true); viewModel?.setApprovalVisibility(true) }
+            if (event == Lifecycle.Event.ON_STOP) { fileController?.background(); viewModel?.setQueueVisibility(false, pauseOnHide = (context as? android.app.Activity)?.isChangingConfigurations != true); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         viewModel?.setSubagentVisibility(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
         viewModel?.setApprovalVisibility(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
+        viewModel?.setQueueVisibility(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); viewModel?.setQueueVisibility(false, pauseOnHide = (context as? android.app.Activity)?.isChangingConfigurations != true); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
     }
     uiState?.let { state ->
         SubagentDetailSheet(state.subagents, onBack = { viewModel?.backSubagent() }, onDismiss = { viewModel?.closeSubagent() },
@@ -692,6 +694,7 @@ fun ChatScreen(
             BoxWithConstraints(modifier = Modifier.imePadding()) {
                 // Leave room for the editable draft, caption row and Back header at large fonts.
                 val approvalHeight = maxHeight * 0.35f
+                val queueHeight = maxHeight * 0.30f
                 val editScroll = rememberScrollState()
                 // Keep Back reachable and let the editor scroll instead of crushing its input under the IME.
                 val editorBounds = if (uiState?.edit != null) Modifier
@@ -719,7 +722,19 @@ fun ChatScreen(
                             TextButton(onClick = { viewModel?.reviewUnknownEdit() }, enabled = uiState.isInitialLoading.not() && !isRefreshing) { Text("Review edit") }
                         }
                     }
+                    uiState?.let { state ->
+                        if (state.queueEnabled && !state.queue.loaded) Text("Loading queue…", modifier = Modifier.padding(horizontal = 16.dp))
+                        com.hermes.bot.feature.chat.components.ChatQueuePanel(state.queue, queueHeight,
+                            onPause = { viewModel?.pauseQueue() }, onResume = { viewModel?.resumeQueue() },
+                            onCancel = { viewModel?.cancelQueuedItem(it) }, onEdit = { viewModel?.editQueuedItem(it) },
+                            onEditText = { viewModel?.updateQueuedEdit(it) }, onFinishEdit = { viewModel?.finishQueuedEdit(it) },
+                            onCheck = { viewModel?.checkQueueStatus() }, onDismiss = { viewModel?.dismissQueuedOutcome() },
+                            onRetry = { viewModel?.retryQueuedItem() })
+                        if (state.commandSuggestion != null) TextButton(onClick = { viewModel?.useCommandSuggestion() },
+                            enabled = state.composerDraft.isEmpty()) { Text("Use suggested text") }
+                    }
                     ChatComposer(
+                        queueEnabled = uiState?.queueEnabled == true && uiState.pendingImages.isEmpty() && uiState.pendingFiles.isEmpty(),
                         draftText = uiState?.edit?.text ?: composerDraft,
                         edit = uiState?.edit,
                         canResendEdit = uiState?.canResendEdit() == true,

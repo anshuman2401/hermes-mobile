@@ -150,6 +150,10 @@ interface GatewayProtocolAdapter {
         origin: com.hermes.bot.data.origin.CanonicalOrigin, generation: Long): GatewayResult<InterruptSessionResult> =
         GatewayResult.Failure(GatewayFailure.IncompatibleProtocol("Message editing unavailable"))
 
+    /** Origin/generation checked under the connection lock before a queued prompt frame. */
+    suspend fun submitPromptScoped(sessionId: String, text: String, origin: com.hermes.bot.data.origin.CanonicalOrigin,
+        generation: Long): GatewayResult<PromptSubmitResult> = GatewayResult.Failure(GatewayFailure.NotConnected())
+
     suspend fun submitPrompt(sessionId: String, text: String): GatewayResult<PromptSubmitResult>
 
     suspend fun slashCatalog(runtimeId: String, origin: com.hermes.bot.data.origin.CanonicalOrigin, generation: Long): GatewayResult<com.hermes.bot.data.commands.SlashCatalog> =

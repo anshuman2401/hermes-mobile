@@ -6,7 +6,7 @@ Documentation correction (2026-10-03): the chat-owner provider description below
 
 ## Product and platform boundary
 
-Hermes Bot Android is a single-module native Kotlin/Jetpack Compose client (`:app`, namespace `com.hermes.bot`). It targets Android 36, supports API 26+, and compiles with Java 21. The host owns agent execution, tools, credentials, durable sessions, and transcript truth. The phone owns presentation state, encrypted connection/auth/session-selection data, drafts, pending-turn evidence, and private redacted diagnostics.
+Hermes Mobile is a single-module native Kotlin/Jetpack Compose client (`:app`, namespace `com.hermes.bot`). It targets Android 36, supports API 26+, and compiles with Java 21. The host owns agent execution, tools, credentials, durable sessions, and transcript truth. The phone owns presentation state, encrypted connection/auth/session-selection data, drafts, pending-turn evidence, and private redacted diagnostics.
 
 The production graph is assembled in `bootstrap/AppContainer.kt`:
 
@@ -200,3 +200,11 @@ Captured session activity authority binds reads and decisions to the saved conne
 The bottom composer has a memory-only edit mode independent of the encrypted normal draft. Complete raw plain-text user rows and confirmed local plain-text submissions carry durable edit targets; compact display-only text and cached snapshots do not authorize an edit. Attachments, skill invocations and truncated/transformed content are excluded.
 
 `ChatViewModel -> TurnCoordinator -> SessionRepository` captures authenticated ownership, reads authoritative history, interrupts a running turn and waits for typed idle evidence before one scoped rewind-aware submission. An edit never falls back to an appended prompt. Unknown edit attempts retain encrypted operation/target/owner evidence and require explicit history review; ordinary text-matching reconciliation and retry cannot consume them. The host owns truncation, archives and subsequent generation; prior external actions are not undone.
+
+## Local chat FIFO
+
+Production chat injects a vault-backed queue coordinator through the ViewModel. Text prompts and parsed commands are local intent, never remote transcript rows. Ten waiting entries and one active entry run in order. Enqueue and waiting prompt edits/cancellations are accepted only after encrypted, partition/workspace/conversation-bound persistence; compared writes reject stale owners and reset residue. Existing installations have no queue record and start empty; no Bot Android data migration occurs.
+
+Prompt dispatch reuses TurnCoordinator and its single-write pending ledger, waiting for attributed terminal completion and ledger settlement. Queued writes require repository-captured PromptSubmissionAccess; queue/owner authority is rechecked after ledger IO and exact origin/socket generation are checked under the adapter connection lock before transport. Unsupported authority fails closed. A terminal observed before acknowledgement is held in memory until admission settles; unknown admission never releases dependent work. Commands reuse the slash/picker/compression repositories and confirmation contracts. YOLO waits for freshly confirmed state. Waiting prompts keep their identity and position when edited; commands allow cancellation only. Stop, approvals and navigation remain immediate. Attachments and dictation require an idle chat and an empty queue.
+
+Background/route leave, disconnect, Stop, restore and failures pause progression. Rotation retains the keyed chat owner. Restored active dispatch becomes unknown and never automatically replays. Status review, dismissal and explicit Resume require authoritative idle evidence after recovery. An explicit failed-item retry creates a new attempt. Channel-first-prompt handoff waits for initial hydration and queue restoration without retrying failed, superseded or cancelled intent. Production encryption stays Android-Keystore-backed and fails closed. Current Mobile verification is recorded in the [queue checkpoint](../design/chat-queue/checkpoint.md).

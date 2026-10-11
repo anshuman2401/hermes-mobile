@@ -1,4 +1,7 @@
 package com.hermes.bot.feature.chat
+import com.hermes.bot.data.queue.*
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 
@@ -159,6 +162,8 @@ class ChatViewModel(
     private val contextUsageRepository: ContextUsageRepository? = null,
     private val subagentRepository: com.hermes.bot.data.subagent.SubagentRepository? = null,
     private val voiceCoordinator: com.hermes.bot.data.voice.VoiceDictationCoordinator? = null,
+    private val chatQueueStore: ChatQueueStore? = null,
+    private val chatQueueFactory: ((() -> String?) -> ChatQueueStore)? = null,
     private val voiceClock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val approvalRepository: com.hermes.bot.data.approval.ApprovalRepository? = null,
     private val fileRepository: com.hermes.bot.data.files.ConversationFileRepository? = null
@@ -280,6 +285,16 @@ class ChatViewModel(
         serverSummaryTitle?.takeUnless { it.isBlank() }
             ?: if (sessionId == "new-session") NEW_CONVERSATION_HEADER_LABEL
             else UNTITLED_CONVERSATION_HEADER_LABEL
+
+    private val chatQueue: ChatQueueCoordinator? = (chatQueueStore ?: chatQueueFactory?.invoke { currentDurableSessionId() })?.let(::ChatQueueCoordinator)
+    private val queueAcceptMutex = Mutex()
+    private var queueForeground = false
+    private var queueTurnCompletion: CompletableDeferred<QueueExecutionResult>? = null
+    private var queuedPromptTerminal: GatewayEvent? = null
+    private var queueCommandResult = QueueExecutionResult.COMPLETE
+    private var queueRequiresIdle = false
+    private var queuedExecutionId: String? = null
+    private var queueRequestedYolo: Boolean? = null
 
     private fun publishStreaming(isStreaming: Boolean) {
         val id = _uiState.value.durableSessionId ?: sessionId
@@ -493,10 +508,20 @@ class ChatViewModel(
         val acceptedGeneration = currentDraftGeneration()
         channelAutoSend = viewModelScope.launch {
             if (!channelInitialRead.await()) return@launch
-            val current = _uiState.value
-            if (gatewayProtocolAdapter?.connectionStatus?.value != ConnectionStatus.CONNECTED ||
-                current.durableSessionId != sessionId || current.runtimeSessionId.isNullOrBlank() ||
-                !current.isComposerReady || !isCurrentDraftGeneration(acceptedGeneration)) return@launch
+            fun ready(): Boolean {
+                val current = _uiState.value
+                return gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED &&
+                    current.durableSessionId == sessionId && !current.runtimeSessionId.isNullOrBlank() &&
+                    current.copy(queueEnabled = false).isComposerReady && isCurrentDraftGeneration(acceptedGeneration)
+            }
+            // Queue restoration may finish after hydration. Wait only for that read;
+            // an initially busy/failed handoff must never arm a later automatic send.
+            if (!ready()) return@launch
+            if (chatQueue != null) {
+                _uiState.first { it.queue.loaded || it.queue.error != null }
+                if (!queueForeground || !ready() || !_uiState.value.canEnqueue ||
+                    _uiState.value.queue.pause == QueuePause.STORAGE) return@launch
+            }
             channelAutoSend = null
             submitPrompt()
         }
@@ -525,6 +550,7 @@ class ChatViewModel(
     private var pickerConfirmationJob: Job? = null
 
     fun openSessionPicker() {
+        if (chatQueue != null) pauseQueue()
         if (_uiState.value.edit != null) return
         val state = _uiState.value
         val runtime = state.runtimeSessionId ?: return
@@ -604,6 +630,7 @@ class ChatViewModel(
                 access = repo.capturePickerAccess(runtime)
                 if (!current()) return@launch
                 if (access == null || !access.isCurrent()) {
+                    if (queuedExecutionId != null) queueCommandResult = QueueExecutionResult.FAILED
                     _uiState.update { it.copy(pickerChange = null, pickerNotice = "Restore the chat before changing settings.") }
                     return@launch
                 }
@@ -616,6 +643,7 @@ class ChatViewModel(
                             it.model.equals(model, true) || (it.providerSlug + "/" + it.model).equals(model, true)
                         }
                         if (matches.size != 1) {
+                            if (queuedExecutionId != null) queueCommandResult = QueueExecutionResult.FAILED
                             _uiState.update { it.copy(pickerChange = null, pickerNotice = "Choose a model from the model picker.") }
                             return@launch
                         }
@@ -633,10 +661,12 @@ class ChatViewModel(
                 when (result) {
                     is GatewayResult.Failure -> {
                         val rejected = result.failure is GatewayFailure.Rpc || result.failure is GatewayFailure.AuthenticationRequired
+                        if (queuedExecutionId != null) queueCommandResult = if (rejected) QueueExecutionResult.FAILED else QueueExecutionResult.UNKNOWN
                         _uiState.update { it.copy(pickerChange = if (rejected) null else it.pickerChange?.copy(phase = PickerChange.Phase.UNCONFIRMED),
                             pickerNotice = if (rejected) "Couldn’t change the setting." else null) }
                     }
                     is GatewayResult.Success -> {
+                        if (queuedExecutionId != null && result.value.confirmRequired) queueCommandResult = QueueExecutionResult.CONFIRMATION
                         if (slashDraft != null && draftGeneration != null && isCurrentDraftGeneration(draftGeneration) && _uiState.value.composerDraft == slashDraft) updateDraft("")
                         _uiState.update { it.copy(pickerChange = if (result.value.confirmRequired) null else it.pickerChange?.copy(
                             phase = if (result.value.deferred) PickerChange.Phase.DEFERRED else PickerChange.Phase.CONFIRMING),
@@ -711,6 +741,7 @@ class ChatViewModel(
             slashResults = it.slashResults.filterNot { result -> result.command == "/compress" }) }
     }
     private fun showCompressionResult(message: String, successful: Boolean) {
+        if (queuedExecutionId != null && !successful) queueCommandResult = QueueExecutionResult.FAILED
         compressionNoticeJob?.cancel()
         val result = com.hermes.bot.data.commands.SlashResult("/compress", message)
         _uiState.update { it.copy(compressionNotice = message,
@@ -756,7 +787,28 @@ class ChatViewModel(
     }
 
     init {
-        _uiState.update { it.copy(dictationAvailable = voiceCoordinator != null) }
+        _uiState.update { it.copy(dictationAvailable = voiceCoordinator != null, queueEnabled = chatQueue != null) }
+        chatQueue?.let { queue ->
+            viewModelScope.launch { queue.state.collect { state -> _uiState.update { it.copy(queue = state) } } }
+            viewModelScope.launch {
+                _uiState.first { !it.isInitialLoading && currentDurableSessionId() != null }
+                queue.restore()
+                if (queue.state.value.pause != null) queueRequiresIdle = true
+            }
+            viewModelScope.launch {
+                _uiState.collect {
+                    if (it.queue.loaded && it.headerConnectionStatus != ConnectionStatus.CONNECTED &&
+                        (it.queue.waiting.isNotEmpty() || it.queue.active != null)) {
+                        queueRequiresIdle = true
+                        queue.pause(QueuePause.DISCONNECTED)
+                        // A settled local stream loses terminal certainty on disconnect.
+                        // Let its owning execution finish as unknown; never resend it.
+                        if (!it.isSubmitting) queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN)
+                    }
+                }
+            }
+            viewModelScope.launch { _uiState.collect { queue.runNext(::canDispatchQueue, ::executeQueueItem) } }
+        }
         approvalController?.let { controller ->
             viewModelScope.launch { controller.state.collect { state -> _uiState.update { it.copy(approvals = state) } } }
             viewModelScope.launch {
@@ -798,6 +850,144 @@ class ChatViewModel(
      * blank never replaces an existing title and never fabricates a raw-ID
      * fallback.
      */
+    fun setQueueVisibility(visible: Boolean, pauseOnHide: Boolean = true) {
+        if (chatQueue == null) return
+        queueForeground = visible
+        if (!visible && pauseOnHide) {
+            queueRequiresIdle = true
+            viewModelScope.launch { chatQueue.pause(QueuePause.BACKGROUND) }
+        } else if (visible) viewModelScope.launch { chatQueue.runNext(::canDispatchQueue, ::executeQueueItem) }
+    }
+    fun pauseQueue() { viewModelScope.launch { chatQueue?.pause(QueuePause.USER) } }
+    fun resumeQueue() {
+        viewModelScope.launch {
+            if (!queueForeground || !checkQueueIdle()) {
+                chatQueue?.notice("Cannot resume yet. Reconnect and check that Hermes has stopped.")
+                return@launch
+            }
+            if (_uiState.value.queue.pause == QueuePause.STORAGE) chatQueue?.restore()
+            chatQueue?.resume()
+        }
+    }
+    private suspend fun checkQueueIdle(): Boolean {
+        if (!queueRequiresIdle && _uiState.value.queue.active?.state !in
+            setOf(QueueItemState.FAILED, QueueItemState.UNKNOWN, QueueItemState.CONFIRMING)) return true
+        val stored = currentDurableSessionId() ?: return false
+        val runtime = _uiState.value.runtimeSessionId ?: return false
+        val snapshot = try { sessionRepository?.fetchHistorySnapshot(stored)?.getOrNull() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null } ?: return false
+        if (historyDisposed || !queueForeground || currentDurableSessionId() != stored ||
+            _uiState.value.runtimeSessionId != runtime || snapshot.activityEvidence != ResumeActivityEvidence.NON_RUNNING) return false
+        queueRequiresIdle = false
+        return true
+    }
+    fun cancelQueuedItem(id: String) { viewModelScope.launch { chatQueue?.cancel(id) } }
+    fun editQueuedItem(id: String) { viewModelScope.launch { chatQueue?.beginEdit(id) } }
+    fun updateQueuedEdit(text: String) { viewModelScope.launch { chatQueue?.editText(text) } }
+    fun finishQueuedEdit(save: Boolean) { viewModelScope.launch { chatQueue?.finishEdit(save) } }
+    fun retryQueuedItem() { viewModelScope.launch { chatQueue?.retryFailed() } }
+    fun useCommandSuggestion() {
+        val state = _uiState.value
+        if (state.composerDraft.isNotEmpty() || state.edit != null) return
+        state.commandSuggestion?.let { updateDraft(it); _uiState.update { current -> current.copy(commandSuggestion = null) } }
+    }
+    fun checkQueueStatus() { queueRequiresIdle = true; refreshSession() }
+    fun dismissQueuedOutcome() {
+        viewModelScope.launch {
+            if (!checkQueueIdle()) {
+                chatQueue?.notice("Cannot dismiss yet. Reconnect and check that Hermes has stopped.")
+                return@launch
+            }
+            val pending = _uiState.value.queue.active?.pendingTurnId
+            if (pending != null && _uiState.value.pendingUnknownTurnId == pending) {
+                try { coordinator?.markResolved(pending) } // explicit dismissal does not assert success
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { chatQueue?.notice("Could not save the review. The queue remains paused."); return@launch }
+                _uiState.update { it.copy(pendingUnknownTurnId = null, submissionStatus = SubmissionStatus.IDLE) }
+            }
+            chatQueue?.dismissActive()
+        }
+    }
+    private fun canDispatchQueue(): Boolean {
+        val state = _uiState.value
+        return queueForeground && !historyDisposed && !queueRequiresIdle &&
+            !state.isInitialLoading && !state.isRefreshing && !state.isSubmitting && !state.isStreaming &&
+            !state.slashBusy && !state.isCompressionBusy && !state.pickerBusy && state.activePickerChange == null &&
+            state.pendingUnknownTurnId == null && state.unknownEditId == null && state.edit == null && !state.voice.isBusy &&
+            !state.approvals.blocksSend && state.savedSnapshotCapturedAtMillis == null &&
+            state.submitBlockedReason == null && state.isAttachmentConnectionAvailable &&
+            state.pendingImages.isEmpty() && state.pendingFiles.isEmpty() && !state.isAttachingImage && !state.isAttachingFile &&
+            !state.runtimeSessionId.isNullOrBlank()
+    }
+    private suspend fun executeQueueItem(item: QueueItem): QueueExecutionResult {
+        queuedExecutionId = item.id
+        try {
+            return when (val payload = item.payload) {
+                is QueuePayload.Prompt -> executeQueuedPrompt(payload.text)
+                is QueuePayload.Command -> {
+                    queueCommandResult = QueueExecutionResult.COMPLETE
+                    queueRequestedYolo = null
+                    if (payload.completion == CommandCompletion.YOLO_STATE && payload.invocation.argument.isBlank() &&
+                        _uiState.value.sessionYolo == null) {
+                        chatQueue?.progress(item.id, QueueItemState.CONFIRMING)
+                        refreshSession()
+                        val fresh = withTimeoutOrNull(15_000) { _uiState.first { !it.isRefreshing } }
+                        if (fresh?.sessionYolo == null || fresh.refreshErrorMessage != null) return QueueExecutionResult.CONFIRMATION
+                    }
+                    if (chatQueue?.canContinue(item.id) != true) return QueueExecutionResult.UNKNOWN
+                    executeSlash(payload.invocation, fromQueue = true)
+                    slashExecutionJob?.join()
+                    if (queueCommandResult != QueueExecutionResult.COMPLETE) return queueCommandResult
+                    chatQueue?.progress(item.id, QueueItemState.CONFIRMING)
+                    val settled = withTimeoutOrNull(15_000) {
+                        _uiState.first { !it.slashBusy && !it.isRefreshing && !it.pickerBusy &&
+                            (it.activePickerChange == null || it.activePickerChange?.phase == PickerChange.Phase.UNCONFIRMED) &&
+                            (!it.isCompressionBusy || it.compressionPhase == CompressionPhase.UNKNOWN) }
+                    } ?: return QueueExecutionResult.CONFIRMATION
+                    if (settled.activePickerChange != null || settled.yoloUnconfirmed || settled.isCompressionBusy ||
+                        settled.refreshErrorMessage != null || (queueRequestedYolo != null && settled.sessionYolo != queueRequestedYolo)) return QueueExecutionResult.CONFIRMATION
+                    queueCommandResult
+                }
+            }
+        } finally { queuedExecutionId = null }
+    }
+    private suspend fun executeQueuedPrompt(text: String, display: String? = null): QueueExecutionResult {
+        val id = queuedExecutionId ?: return QueueExecutionResult.FAILED
+        if (chatQueue?.canContinue(id) != true) return QueueExecutionResult.UNKNOWN
+        if (!canDispatchQueue()) return QueueExecutionResult.UNKNOWN
+        val completion = CompletableDeferred<QueueExecutionResult>()
+        queueTurnCompletion = completion
+        try {
+            submitPlainPrompt(text, display, clearDraft = false)
+            if (!_uiState.value.isSubmitting && !_uiState.value.isStreaming) return QueueExecutionResult.FAILED
+            return completion.await()
+        } finally { queueTurnCompletion = null; queuedPromptTerminal = null }
+    }
+    private fun enqueueTextOrCommand(command: com.hermes.bot.data.commands.SlashInvocation?) {
+        val state = _uiState.value
+        if (!state.canEnqueue) return
+        val text = state.composerDraft
+        val generation = currentDraftGeneration()
+        if (command != null) {
+            val name = com.hermes.bot.data.commands.SlashCommandPolicy.aliases["/"+command.name]?.removePrefix("/") ?: command.name
+            if ("/"+name in com.hermes.bot.data.commands.SlashCommandPolicy.unsupported ||
+                (name == "yolo" && command.argument !in setOf("", "on", "off")) ||
+                (name == "reasoning" && command.argument.isNotBlank() && command.argument !in SESSION_REASONING_LEVELS)) {
+                slashNotice(command.text, "This command or argument is not supported.")
+                return
+            }
+        }
+        val payload = if (command == null) QueuePayload.Prompt(text.trim()) else QueuePayload.Command(command)
+        viewModelScope.launch {
+            queueAcceptMutex.withLock {
+                if (!isCurrentDraftGeneration(generation) || _uiState.value.composerDraft != text) return@withLock
+                if (chatQueue?.enqueue(payload) == true && isCurrentDraftGeneration(generation) && _uiState.value.composerDraft == text)
+                    updateDraft("")
+            }
+        }
+    }
+
     fun applyInitialTitle(title: String?) {
         val sanitized = title?.takeUnless { it.isBlank() } ?: return
         // The server summary is the FIRST title source, so a threaded
@@ -837,6 +1027,8 @@ class ChatViewModel(
     private var editGeneration = 0L
 
     fun beginMessageEdit(messageId: String) {
+        if (_uiState.value.queue.edit != null || _uiState.value.queue.active != null) return
+        pauseQueue()
         val state = _uiState.value
         val message = state.timeline.filterIsInstance<UserMessage>().firstOrNull { it.id == messageId } ?: return
         if (!state.canEdit(message)) return
@@ -1002,6 +1194,10 @@ class ChatViewModel(
         } else readContextUsage()
     }
     fun compressContext() {
+        if (chatQueue != null) {
+            if (_uiState.value.canQueueCommand) viewModelScope.launch { chatQueue.enqueue(QueuePayload.Command(com.hermes.bot.data.commands.SlashInvocation("compress", ""))) }
+            return
+        }
         if (_uiState.value.canCompressContext)
             executeSlash(com.hermes.bot.data.commands.SlashInvocation("compress", ""), fromToolbar = true)
     }
@@ -1193,6 +1389,8 @@ class ChatViewModel(
     }
 
     private fun cancelSlashExecution() {
+        if (queuedExecutionId != null && slashExecutionJob?.isActive == true)
+            queueCommandResult = QueueExecutionResult.UNKNOWN
         if (_uiState.value.yoloPending) {
             unknownYolo()
             _uiState.update { it.copy(yoloPending = false, isRefreshing = false) }
@@ -1253,18 +1451,23 @@ class ChatViewModel(
             com.hermes.bot.data.commands.SlashResult(command, text.take(16_384))).takeLast(8)) }
     }
     fun toggleYolo() {
+        if (chatQueue != null) {
+            if (_uiState.value.canQueueCommand) viewModelScope.launch { chatQueue.enqueue(QueuePayload.Command(com.hermes.bot.data.commands.SlashInvocation("yolo", ""))) }
+            return
+        }
         if (!_uiState.value.canToggleYolo) return
         executeSlash(com.hermes.bot.data.commands.SlashInvocation("yolo", ""), fromToolbar = true)
     }
 
-    private fun executeSlash(invocation: com.hermes.bot.data.commands.SlashInvocation, fromToolbar: Boolean = false) {
+    private fun executeSlash(invocation: com.hermes.bot.data.commands.SlashInvocation, fromToolbar: Boolean = false, fromQueue: Boolean = false) {
         if (_uiState.value.voice.isBusy) return
-        val repo = slashCommands ?: return
+        val repo = slashCommands ?: run { if (fromQueue) queueCommandResult = QueueExecutionResult.FAILED; return }
         val state = _uiState.value
-        if (if (fromToolbar) {
+        if (!fromQueue && if (fromToolbar) {
             if (invocation.name == "compress") !state.canCompressContext else !state.canToggleYolo
         } else !state.isComposerReady) return
         if (invocation.name == "yolo" && state.yoloPending) return
+        if (fromQueue && !canDispatchQueue()) { queueCommandResult = QueueExecutionResult.FAILED; return }
         val runtime = state.runtimeSessionId ?: return
         val stored = currentDurableSessionId() ?: return
         if (state.isStreaming && invocation.name !in setOf("status", "help", "commands", "stop", "new", "reset", "clear", "resume", "sessions", "switch")) {
@@ -1279,12 +1482,13 @@ class ChatViewModel(
             dismissSlashSuggestions()
             performSessionPick(model = invocation.argument.takeIf { invocation.name == "model" },
                 effort = invocation.argument.takeIf { invocation.name == "reasoning" },
-                slashDraft = state.composerDraft, draftGeneration = currentDraftGeneration())
+                slashDraft = if (fromQueue) null else state.composerDraft, draftGeneration = if (fromQueue) null else currentDraftGeneration())
             return
         }
         val command = if (invocation.name == "yolo" && invocation.argument.isBlank()) {
             val enabled = state.sessionYolo
             if (enabled == null) {
+                if (fromQueue) queueCommandResult = QueueExecutionResult.CONFIRMATION
                 slashNotice("/yolo", "Approval mode unknown. Refreshing chat; check the mode before trying again, or use /yolo on or /yolo off.")
                 refreshSession()
                 return
@@ -1298,9 +1502,10 @@ class ChatViewModel(
         val draft = state.composerDraft
         val generation = currentDraftGeneration()
         dismissSlashSuggestions()
+        if (fromQueue && command.name == "yolo") queueRequestedYolo = command.argument == "on"
         yoloWritePending = command.name == "yolo"
         _uiState.update { it.copy(slashBusy = true,
-            sessionYolo = if (yoloWritePending) command.argument == "on" else it.sessionYolo,
+            sessionYolo = if (yoloWritePending && !fromQueue) command.argument == "on" else it.sessionYolo,
             yoloPending = yoloWritePending || it.yoloPending,
             yoloUnconfirmed = yoloWritePending || it.yoloUnconfirmed) }
         if (command.name == "compress") {
@@ -1312,6 +1517,7 @@ class ChatViewModel(
         slashExecutionJob = viewModelScope.launch {
             try {
                 val owner = repo.capture(stored, runtime) ?: run {
+                    if (fromQueue) queueCommandResult = QueueExecutionResult.FAILED
                     slashNotice("/"+invocation.name, "Restore the chat before running a command.")
                     if (command.name == "compress") _uiState.update { it.copy(compressionPhase = CompressionPhase.IDLE,
                         compressionNotice = "Restore the chat before compressing context.") }
@@ -1325,6 +1531,7 @@ class ChatViewModel(
                         com.hermes.bot.data.commands.SlashDirective.Output(if (state.isStreaming) "Stopped the active turn." else "No active turn on this device."))
                 } else repo.execute(owner, command)
                 if (historyDisposed || execution != slashExecution || _uiState.value.runtimeSessionId != runtime || !repo.isCurrent(owner)) {
+                    if (fromQueue) queueCommandResult = QueueExecutionResult.UNKNOWN
                     if (!historyDisposed && command.name == "yolo" && execution == slashExecution &&
                         _uiState.value.runtimeSessionId == runtime) unknownYolo()
                     if (command.name == "compress" && execution == slashExecution)
@@ -1333,10 +1540,11 @@ class ChatViewModel(
                     return@launch
                 }
                 fun clearOriginalDraft() {
-                    if (!fromToolbar && isCurrentDraftGeneration(generation) && _uiState.value.composerDraft == draft) updateDraft("")
+                    if (!fromToolbar && !fromQueue && isCurrentDraftGeneration(generation) && _uiState.value.composerDraft == draft) updateDraft("")
                 }
                 when (outcome) {
                     is com.hermes.bot.data.commands.CommandOutcome.Failure -> {
+                        if (fromQueue) queueCommandResult = if (outcome.outcomeUnknown) QueueExecutionResult.UNKNOWN else QueueExecutionResult.FAILED
                         slashNotice("/"+invocation.name, outcome.message)
                         if (command.name == "yolo") {
                             yoloWritePending = false
@@ -1366,12 +1574,19 @@ class ChatViewModel(
                             if (invocation.name in setOf("model", "reasoning", "title")) refreshSession()
                         }
                         is com.hermes.bot.data.commands.SlashDirective.Prefill -> {
-                            if (isCurrentDraftGeneration(generation)) updateDraft(directive.message)
+                            if (fromQueue) {
+                                _uiState.update { it.copy(commandSuggestion = directive.message) }
+                                slashNotice("/"+invocation.name, "Suggested text ready. Use it when your draft is empty.")
+                            }
+                            else if (isCurrentDraftGeneration(generation)) updateDraft(directive.message)
                             directive.notice?.let { slashNotice("/"+invocation.name, it) }
                             if (invocation.name == "undo") refreshSession()
                         }
                         is com.hermes.bot.data.commands.SlashDirective.Send -> {
-                            if (_uiState.value.isStreaming || _uiState.value.isSubmitting) {
+                            if (fromQueue) {
+                                _uiState.update { it.copy(slashBusy = false) }
+                                queueCommandResult = executeQueuedPrompt(directive.message, directive.display ?: invocation.text)
+                            } else if (_uiState.value.isStreaming || _uiState.value.isSubmitting) {
                                 slashNotice("/"+invocation.name, "Stop the active reply before sending this command.")
                             } else {
                                 directive.notice?.let { slashNotice("/"+invocation.name, it) }
@@ -1395,6 +1610,7 @@ class ChatViewModel(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
                 if (!historyDisposed && execution == slashExecution && _uiState.value.runtimeSessionId == runtime) {
+                    if (fromQueue) queueCommandResult = QueueExecutionResult.UNKNOWN
                     slashNotice("/"+invocation.name, "Command outcome unknown. Check the chat before trying again.")
                     if (command.name == "yolo") { unknownYolo(); refreshSession() }
                     if (command.name == "compress") _uiState.update { it.copy(compressionPhase = CompressionPhase.UNKNOWN,
@@ -2901,6 +3117,14 @@ class ChatViewModel(
                             compressionNotice = "Compression outcome unknown. Refresh to check server history.") }
                     }
                 }
+                // The writer acknowledgement can lag the terminal event. Keep one
+                // admitted-runtime terminal in memory until the pending ledger settles;
+                // ambiguity still holds the queue and never authorizes another write.
+                if (queueTurnCompletion != null && _uiState.value.isSubmitting && activeAssistantEntryId == null &&
+                    (event is GatewayEvent.MessageComplete || event is GatewayEvent.Error)) {
+                    if (queuedPromptTerminal == null) queuedPromptTerminal = event
+                    return@collect
+                }
                 when (event) {
                     is GatewayEvent.MessageStart -> beginTaskTurn()
                     is GatewayEvent.TasksUpdated -> acceptTaskSnapshot(event.snapshot)
@@ -3165,6 +3389,8 @@ class ChatViewModel(
     }
 
     fun submitPrompt() {
+        channelAutoSend?.cancel()
+        channelAutoSend = null
         if (_uiState.value.edit != null) { resendEditedMessage(); return }
         if (_uiState.value.unknownEditId != null) return
         if (_uiState.value.voice.isBusy) return
@@ -3175,7 +3401,16 @@ class ChatViewModel(
             return
         }
         if (slashCommands != null && command != null && state.pendingImages.isEmpty() && state.pendingFiles.isEmpty()) {
-            executeSlash(command)
+            val immediate = command.name in setOf("stop", "new", "reset", "clear", "resume", "sessions", "switch") ||
+                (command.name in setOf("model", "reasoning") && command.argument.isBlank())
+            if (chatQueue != null && !immediate) enqueueTextOrCommand(command) else {
+                if (chatQueue != null && command.name != "stop") pauseQueue()
+                executeSlash(command)
+            }
+            return
+        }
+        if (chatQueue != null && state.pendingImages.isEmpty() && state.pendingFiles.isEmpty()) {
+            enqueueTextOrCommand(null)
             return
         }
         submitPlainPrompt()
@@ -3186,28 +3421,19 @@ class ChatViewModel(
         channelAutoSend?.cancel()
         channelAutoSend = null
         val stateAtSend = _uiState.value
+        if (chatQueue != null && (stateAtSend.pendingImages.isNotEmpty() || stateAtSend.pendingFiles.isNotEmpty()) &&
+            !stateAtSend.canAttachImage) return
         val draft = promptOverride ?: stateAtSend.composerDraft.trim()
         val submittedText = buildAttachmentPrompt(draft, stateAtSend.pendingImages, stateAtSend.pendingFiles)
         // BLD-006 S3 single-flight: the guard covers BOTH the submitting window
         // and the local-turn streaming window, so a second Send/IME Send while
         // an admitted turn is live is a no-op (no frame, no row, no draft clear).
         //
-        // PR-34 review F1 (defensive-branch contract): this single-flight guard
-        // is the ONLY production-reachable rejection path, and it is what makes
-        // the RejectedBusy/ValidationFailed restore branch below unreachable
-        // with the current TurnCoordinator: every gateway failure maps to
-        // AmbiguousUnknown (TurnCoordinator never constructs RejectedBusy), and
-        // the only reachable ValidationFailed causes are a blank prompt (this
-        // pre-guard) and "old pending turn not found" (retry path only). The
-        // coordinator also serializes submissions under submitMutex, and all
-        // entry points (Send tap, IME action, retry fallback) run on the main
-        // dispatcher, so no interleaving is possible between this guard check
-        // and the isSubmitting=true update. The branch stays because
-        // TurnSubmissionOutcome is a sealed contract surface: a future
-        // coordinator implementation may construct RejectedBusy/ValidationFailed
-        // without this call site changing, and the draft-preserving rejection
-        // semantics below are the required response when that happens. Do not
-        // "simplify" the branch away.
+        // This synchronous writer guard preserves single flight. Queued intent
+        // also validates captured authority after ledger IO, so owner revocation
+        // can return ValidationFailed without a frame. Definite rejection removes
+        // the optimistic row and restores only a direct-send draft; accepted
+        // queue intent remains held in its existing entry.
         if (stateAtSend.unknownEditId != null || stateAtSend.edit != null || submittedText.isBlank() || stateAtSend.isInitialLoading || stateAtSend.isRefreshing ||
             stateAtSend.isAttachingImage || stateAtSend.isAttachingFile ||
             stateAtSend.isSubmitting || stateAtSend.isStreaming || stateAtSend.slashBusy || stateAtSend.isCompressionBusy ||
@@ -3252,7 +3478,22 @@ class ChatViewModel(
                     current.copy(timeline = current.timeline + userEntry)
                 }
 
-                val outcome = coord.submitPrompt(storedId, effectiveRuntimeSession, submittedText)
+                val queueAttempt = queuedExecutionId.takeIf { queueTurnCompletion != null }
+                val outcome = try { coord.submitPrompt(storedId, effectiveRuntimeSession, submittedText,
+                    queueCurrent = queueAttempt?.let { id -> suspend {
+                        chatQueue?.canContinue(id) == true && !historyDisposed && queueForeground && !queueRequiresIdle &&
+                            currentDurableSessionId() == storedId && _uiState.value.runtimeSessionId == effectiveRuntimeSession &&
+                            _uiState.value.isAttachmentConnectionAvailable &&
+                            _uiState.value.queue.pause !in setOf(QueuePause.DISCONNECTED, QueuePause.BACKGROUND, QueuePause.STOPPED)
+                    } }) }
+                catch (cancelled: CancellationException) { queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN); throw cancelled }
+                catch (_: Exception) {
+                    if (queueTurnCompletion == null) throw IllegalStateException("Prompt preparation failed")
+                    queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN)
+                    _uiState.update { it.copy(isSubmitting = false, submissionStatus = SubmissionStatus.UNKNOWN,
+                        errorMessage = "Prompt outcome unknown. Check history before continuing.") }
+                    return@launch
+                }
                 when (outcome) {
                     is TurnSubmissionOutcome.Admitted -> {
                         activeTurnId = outcome.pendingTurnId
@@ -3296,10 +3537,33 @@ class ChatViewModel(
                                 )
                             )
                         }
+                        queuedExecutionId?.let { id -> viewModelScope.launch { chatQueue?.progress(id, QueueItemState.STREAMING, outcome.pendingTurnId) } }
                         publishStreaming(true)
+                        val earlyTerminal = queuedPromptTerminal
+                        queuedPromptTerminal = null
+                        when (earlyTerminal) {
+                            is GatewayEvent.MessageComplete -> {
+                                settleTaskProgress()
+                                finalizeAssistantTurn(
+                                    when (earlyTerminal.status?.trim()?.lowercase(Locale.ROOT)) {
+                                        "complete" -> AssistantMessageState.COMPLETE
+                                        "interrupted" -> AssistantMessageState.INTERRUPTED
+                                        "error" -> AssistantMessageState.FAILED
+                                        else -> AssistantMessageState.UNKNOWN
+                                    }, terminalText = earlyTerminal.text, usage = earlyTerminal.usage,
+                                    finalReasoning = earlyTerminal.reasoning)
+                            }
+                            is GatewayEvent.Error -> {
+                                settleTaskProgress()
+                                finalizeAssistantTurn(AssistantMessageState.FAILED, errorMessage = earlyTerminal.message)
+                            }
+                            else -> Unit
+                        }
                     }
 
                     is TurnSubmissionOutcome.AmbiguousUnknown -> {
+                        queuedExecutionId?.let { id -> chatQueue?.progress(id, QueueItemState.UNKNOWN, outcome.pendingTurnId) }
+                        queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN)
                         activeTurnId = outcome.pendingTurnId
                         // T2: a new prompt attempt begins here (same frozen
                         // invariant as the admitted-turn clear above), so the
@@ -3327,26 +3591,19 @@ class ChatViewModel(
                     }
 
                     is TurnSubmissionOutcome.RejectedBusy, is TurnSubmissionOutcome.ValidationFailed -> {
+                        queueTurnCompletion?.complete(QueueExecutionResult.FAILED)
                         // BLD-006 S3: a local rejection preserves the draft
                         // (in memory and in the vault) and leaves no stranded
                         // optimistic SENDING row.
                         //
-                        // PR-34 review F4 (trimmed-draft restore contract): the
-                        // restored draft is the already-trimmed submit value —
-                        // any leading/trailing whitespace from the raw draft is
-                        // intentionally not resurrected. This branch is
-                        // defensive (unreachable with the current
-                        // TurnCoordinator; see the single-flight guard comment
-                        // above), so the trim is not observable in a test
-                        // today. If a future coordinator implementation makes
-                        // this branch reachable and the whitespace loss becomes
-                        // user-visible, restore `rawDraftAtSubmit` (captured
-                        // pre-trim) instead of the trimmed value.
+                        // A direct send restores its trimmed draft if the user
+                        // has not edited it. A queued send already owns durable
+                        // intent and must not duplicate it into the composer.
                         _uiState.update { current ->
                             val withoutOptimisticRow =
                                 current.timeline.filterNot { it.id == tempId }
                             val restoredDraft =
-                                if (current.composerDraft.isBlank() &&
+                                if (queueAttempt == null && current.composerDraft.isBlank() &&
                                     isCurrentDraftGeneration(draftGenerationAtSend)
                                 ) draft else current.composerDraft
                             current.copy(
@@ -3356,7 +3613,7 @@ class ChatViewModel(
                                 errorMessage = "Unable to submit prompt"
                             )
                         }
-                        if (isCurrentDraftGeneration(draftGenerationAtSend)) {
+                        if (queueAttempt == null && isCurrentDraftGeneration(draftGenerationAtSend)) {
                             queueDraftOperation(draftGenerationAtSend) {
                                 vaultStorage?.let { storage ->
                                     storage.saveDraft(
@@ -3374,6 +3631,11 @@ class ChatViewModel(
                 return@launch
             }
 
+            if (queueTurnCompletion != null) {
+                queueTurnCompletion?.complete(QueueExecutionResult.FAILED)
+                _uiState.update { it.copy(isSubmitting = false) }
+                return@launch
+            }
             // Fallback when coordinator is absent (e.g. standalone preview)
             val turnId = "turn-${UUID.randomUUID()}"
             val userEntry = UserMessage(
@@ -3396,6 +3658,10 @@ class ChatViewModel(
      * Guarantees a fresh pendingTurnId attempt; never reuses the old attempt.
      */
     fun retryAmbiguousPrompt() {
+        if (_uiState.value.queue.active != null || _uiState.value.queue.waiting.isNotEmpty()) {
+            viewModelScope.launch { chatQueue?.notice("Review the uncertain queued item before creating a new attempt.") }
+            return
+        }
         if (_uiState.value.unknownEditId != null || _uiState.value.edit != null) return
         val oldTurnId = _uiState.value.pendingUnknownTurnId ?: return
 
@@ -3555,6 +3821,10 @@ class ChatViewModel(
      * and [upgradeStoppedTurnToComplete] for the race audit and rules).
      */
     fun stopStreaming() {
+        if (chatQueue != null) {
+            queueRequiresIdle = true
+            viewModelScope.launch { chatQueue.pause(QueuePause.STOPPED) }
+        }
         if (_uiState.value.edit?.busy == true) return
         if (!_uiState.value.isStreaming || activeAssistantEntryId == null) {
             return
@@ -3967,18 +4237,26 @@ class ChatViewModel(
         publishStreaming(false)
 
         // The active turn is sealed; the next submit mints a fresh entry ID.
-        activeTurnId?.let { turnId ->
-            viewModelScope.launch {
-                pendingTurnLedger?.markResolved(turnId)
-                activeTurnId = null
-            }
+        val completingQueueTurn = queueTurnCompletion
+        val completionResult = when (terminalState) {
+            AssistantMessageState.COMPLETE -> QueueExecutionResult.COMPLETE
+            AssistantMessageState.FAILED, AssistantMessageState.INTERRUPTED -> QueueExecutionResult.FAILED
+            else -> QueueExecutionResult.UNKNOWN
         }
+        val completedTurnId = activeTurnId
         // The turn is sealed: dispose the scheduler (its final drain is a
         // no-op after the flush above — no duplicated text).
         deltaPublicationScheduler?.dispose()
         deltaPublicationScheduler = null
         activeAssistantEntryId = null
         activeTurnBuffer = null
+        completedTurnId?.let { turnId ->
+            viewModelScope.launch {
+                pendingTurnLedger?.markResolved(turnId)
+                if (activeTurnId == turnId) activeTurnId = null
+                completingQueueTurn?.complete(completionResult)
+            }
+        } ?: completingQueueTurn?.complete(completionResult)
     }
 
     /**

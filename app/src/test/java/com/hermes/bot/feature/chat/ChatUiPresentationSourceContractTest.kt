@@ -118,7 +118,7 @@ class ChatUiPresentationSourceContractTest {
         val visualStart = action.indexOf("Box(")
         assertTrue("action must contain a visual Box", visualStart >= 0)
         val parent = action.substring(0, visualStart)
-        val visual = action.substring(visualStart, action.indexOf("if (isSubmitting) {"))
+        val visual = action.substring(visualStart, action.indexOf("if (isSubmitting && !queueEnabled) {"))
         val stop = action.substring(action.indexOf("} else if (showStop) {"), action.indexOf("PaperPlaneIcon("))
 
         assertTrue("interactive parent stays 48dp", parent.contains(".size(48.dp)"))
@@ -326,7 +326,7 @@ class ChatUiPresentationSourceContractTest {
         val addGlyph = attachment.substring(attachment.indexOf("Icon("))
         val action = composer.substring(composer.indexOf("val buttonEnabled"))
         val send = action.substring(action.indexOf("PaperPlaneIcon("))
-        val spinner = action.substring(action.indexOf("if (isSubmitting) {"), action.indexOf("} else if (showStop) {"))
+        val spinner = action.substring(action.indexOf("if (isSubmitting && !queueEnabled) {"), action.indexOf("} else if (showStop) {"))
         val readiness = composer.substring(composer.indexOf("val canSend"), composer.indexOf("Column("))
         val field = composer.substring(composer.indexOf("OutlinedTextField("), composer.indexOf("val buttonEnabled"))
 
@@ -537,7 +537,7 @@ class ChatUiPresentationSourceContractTest {
         )
         val interimBranch = viewModel.substring(
             viewModel.indexOf("is GatewayEvent.MessageInterim"),
-            viewModel.indexOf("is GatewayEvent.MessageComplete")
+            viewModel.indexOf("is GatewayEvent.MessageComplete", viewModel.indexOf("is GatewayEvent.MessageInterim"))
         )
         assertFalse(
             "no-active-turn interim branch must not route to addGenericActivity",
