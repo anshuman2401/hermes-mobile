@@ -122,6 +122,35 @@ class HostUpdateRepositoryTest {
         }
     }
 
+    @Test fun interruptedReceiptIsAValidHostStatus() = runBlocking {
+        fixture().use { f ->
+            f.prepare()
+            f.server.enqueue(MockResponse().setBody("""{"name":"hermes-update","running":false,"receipt":{"outcome":"interrupted"}}"""))
+            val status = (f.repo.status(f.scope()) as HostUpdateResult.Ready).value
+            assertFalse(status.running)
+            assertEquals("interrupted", status.outcome)
+            assertNull(status.actionId)
+        }
+    }
+
+    @Test fun invalidStructuredResponsesAreNotConnectionFailures() = runBlocking {
+        fixture().use { f ->
+            f.prepare()
+            for (body in listOf("{}", """{"name":"hermes-update","running":false,"receipt":{"outcome":"unrecognized"}}""", "not-json")) {
+                f.server.enqueue(MockResponse().setBody(body))
+                assertEquals(HostUpdateFailure.MALFORMED, (f.repo.status(f.scope()) as HostUpdateResult.Failed).reason)
+            }
+            f.server.enqueue(MockResponse().setBody(available.replace("\"can_apply\":true", "\"can_apply\":\"invalid\"")))
+            assertEquals(HostUpdateFailure.MALFORMED, (f.repo.check(f.scope()) as HostUpdateResult.Failed).reason)
+            f.server.enqueue(MockResponse().setBody(available))
+            f.server.enqueue(MockResponse().setBody("{}"))
+            assertEquals(HostUpdateFailure.UNKNOWN, (f.repo.start(f.scope()) as HostUpdateResult.Failed).reason)
+            f.server.enqueue(MockResponse().setBody(available))
+            f.server.enqueue(MockResponse().setBody("""{"ok":false}"""))
+            assertEquals(HostUpdateFailure.REFUSED, (f.repo.start(f.scope()) as HostUpdateResult.Failed).reason)
+        }
+    }
+
     private class Fixture(folder: java.io.File) : AutoCloseable {
         val server = MockWebServer().apply { start() }
         val origin = CanonicalOrigin.parse(server.url("/").toString().removeSuffix("/")).getOrThrow()

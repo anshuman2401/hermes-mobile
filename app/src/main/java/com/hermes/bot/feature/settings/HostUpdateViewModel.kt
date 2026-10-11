@@ -57,7 +57,7 @@ class HostUpdateViewModel(
                         val status = repository.status(captured.value)
                         if (request != generation) return@launch
                         if (status is HostUpdateResult.Failed) {
-                            mutable.value = HostUpdateUiState(failure = status.reason)
+                            loadWithoutTracking(captured.value, status.reason, request)
                             return@launch
                         }
                         val current = (status as HostUpdateResult.Ready).value
@@ -83,8 +83,12 @@ class HostUpdateViewModel(
                 val status = repository.status(captured)
                 if (request != generation) return@launch
                 when (status) {
-                    is HostUpdateResult.Failed -> mutable.value = mutable.value.copy(loading = false, failure = status.reason,
-                        phase = if (actionId != null) HostUpdatePhase.UNKNOWN else mutable.value.phase)
+                    is HostUpdateResult.Failed -> {
+                        mutable.value = mutable.value.copy(loading = false, failure = status.reason, canTrack = false,
+                            confirmationOpen = false, phase = if (actionId != null) HostUpdatePhase.UNKNOWN else mutable.value.phase)
+                        if (actionId == null && mutable.value.phase == HostUpdatePhase.IDLE)
+                            loadWithoutTracking(captured, status.reason, request)
+                    }
                     is HostUpdateResult.Ready -> {
                         if (actionId != null && !status.value.running) {
                             applyTerminal(status.value.actionId, status.value.outcome, request)
@@ -129,6 +133,16 @@ class HostUpdateViewModel(
             } catch (cancelled: CancellationException) { throw cancelled }
               catch (_: Exception) { if (request == generation) mutable.value = mutable.value.copy(phase = HostUpdatePhase.UNKNOWN, failure = HostUpdateFailure.UNKNOWN) }
         }
+    }
+
+    private suspend fun loadWithoutTracking(captured: InsightsScope, failure: HostUpdateFailure, request: Long) {
+        val canRead = failure in setOf(HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)
+        mutable.value = mutable.value.copy(loading = canRead, failure = failure, check = null,
+            checkedAt = null, canTrack = false, confirmationOpen = false)
+        if (!canRead) return
+        loadCheck(captured, request)
+        if (request == generation && mutable.value.check != null)
+            mutable.value = mutable.value.copy(failure = HostUpdateFailure.STATUS_UNAVAILABLE)
     }
 
     private suspend fun loadCheck(captured: InsightsScope, request: Long) {
@@ -181,8 +195,8 @@ class HostUpdateViewModel(
             return
         }
         mutable.value = when {
-            confirmed && outcome in setOf("partial", "failed", "refused") -> mutable.value.copy(phase = HostUpdatePhase.FAILED,
-                failure = HostUpdateFailure.REFUSED, loading = false)
+            confirmed && outcome in setOf("partial", "failed", "refused", "interrupted") -> mutable.value.copy(phase = HostUpdatePhase.FAILED,
+                failure = if (outcome == "interrupted") HostUpdateFailure.INTERRUPTED else HostUpdateFailure.REFUSED, loading = false)
             else -> mutable.value.copy(phase = HostUpdatePhase.UNKNOWN, failure = HostUpdateFailure.UNKNOWN, loading = false)
         }
     }

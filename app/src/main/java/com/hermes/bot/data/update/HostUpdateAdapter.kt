@@ -51,11 +51,17 @@ class HostUpdateAdapter(
                 !in 200..299 -> return HostUpdateResult.Failed(if (method == "POST" && response.statusCode in 400..499)
                     HostUpdateFailure.REFUSED else if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.UNAVAILABLE)
             }
-            val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-            val root = GatewayJson.parseOrNull(decoder.decode(ByteBuffer.wrap(response.body())).toString()) as? JsonObject
-                ?: return HostUpdateResult.Failed(if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.MALFORMED)
-            val value = decode(root)
+            val bytes = response.body()
+            val value = try {
+                val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                val root = GatewayJson.parseOrNull(decoder.decode(ByteBuffer.wrap(bytes)).toString()) as? JsonObject
+                    ?: return HostUpdateResult.Failed(if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.MALFORMED)
+                decode(root)
+            } catch (refused: HostUpdateRefusedException) { throw refused }
+              catch (_: Exception) {
+                return HostUpdateResult.Failed(if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.MALFORMED)
+            }
             currentCoroutineContext().ensureActive()
             if (!auth.isResponseCurrent(exchange.receipt)) HostUpdateResult.Failed(if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.STALE)
             else HostUpdateResult.Ready(value)
@@ -103,7 +109,7 @@ class HostUpdateAdapter(
         val running = root["running"]?.asBooleanOrNull() ?: throw IllegalArgumentException()
         val id = root["action_id"]?.asStringOrNull()?.also { require(it.matches(Regex("[0-9a-f]{32}"))) }
         val outcome = root["receipt"]?.asObjectOrNull()?.get("outcome")?.asStringOrNull()
-            ?.also { require(it in setOf("running", "success", "partial", "failed", "refused")) }
+            ?.also { require(it in setOf("running", "success", "partial", "failed", "refused", "interrupted")) }
         return HostUpdateStatus(running, id, outcome)
     }
 
