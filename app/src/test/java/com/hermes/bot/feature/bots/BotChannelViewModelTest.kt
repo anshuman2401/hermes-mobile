@@ -130,4 +130,14 @@ class BotChannelViewModelTest {
         assertEquals("Untitled conversation", row.title); assertNull(row.opening); assertNull(row.startedAt); assertNull(row.messageCount)
         assertFalse(row.toString().contains("Untitled"))
     }
+    @Test fun matchingConversationRowsStayVisibleDuringRefreshWithoutEnablingActions() {
+        val state = SessionsUiState(selectedProfileName = "Alpha", isLoading = true)
+        assertTrue(isChannelListVisible("Alpha", state))
+        assertFalse(isChannelListReady("Alpha", state))
+        assertFalse(isChannelListVisible("Beta", state))
+        assertFalse(isChannelListVisible(null, state))
+        assertFalse(isChannelListVisible("Alpha", state.copy(staleProfileNotice = "Synthetic notice")))
+        assertTrue(isChannelListReady("Alpha", state.copy(isLoading = false)))
+    }
+
 }

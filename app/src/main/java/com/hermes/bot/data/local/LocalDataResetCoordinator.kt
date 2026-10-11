@@ -22,7 +22,14 @@ interface LocalDataResetCoordinator {
 
 class DefaultLocalDataResetCoordinator(
     private val vault: VaultStorage,
+    private val clearMemory: () -> Unit = {},
 ) : LocalDataResetCoordinator {
-    override suspend fun clearOfflineCache(): CacheClearResult = vault.clearCache()
-    override suspend fun clearAllLocalData(): CacheClearResult = vault.clearAll()
+    override suspend fun clearOfflineCache(): CacheClearResult {
+        clearMemory()
+        return try { vault.clearCache() } finally { clearMemory() }
+    }
+    override suspend fun clearAllLocalData(): CacheClearResult {
+        clearMemory()
+        return try { vault.clearAll() } finally { clearMemory() }
+    }
 }

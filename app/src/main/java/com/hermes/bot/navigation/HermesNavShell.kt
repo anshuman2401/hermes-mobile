@@ -57,6 +57,7 @@ import com.hermes.bot.feature.bots.BotChannelScreen
 import com.hermes.bot.feature.bots.BotChannelComposer
 import com.hermes.bot.feature.bots.botBoardConversations
 import com.hermes.bot.feature.bots.isChannelListReady
+import com.hermes.bot.feature.bots.isChannelListVisible
 import com.hermes.bot.feature.chat.ChatScreen
 import com.hermes.bot.feature.connect.StartupPresentation
 import com.hermes.bot.feature.connect.ConnectScreen
@@ -801,7 +802,7 @@ fun HermesNavShell(
                                         selecting = isWorkspaceSwitchInFlight || channelState.transferring ||
                                             !ContextProfileSwitcherPolicy.isSwitchingAllowed(sessionsUiState.activeTurnStreaming.isStreaming),
                                         channel = channelState.channel.takeIf { channelState.connectionId == profilesUiState.activeProfileId && channelState.normalizedOrigin == savedTarget?.normalizedOrigin },
-                                        conversationCount = botBoardConversations(sessionsUiState.sessions).size.takeIf { isChannelListReady(channelState.channel, sessionsUiState) },
+                                        conversationCount = botBoardConversations(sessionsUiState.sessions).size.takeIf { isChannelListVisible(channelState.channel, sessionsUiState) },
                                         channelContent = { BotBoardChannelContent() },
                                         onRefreshChannel = { channelVm.clearThreadPreviews(); sessionsViewModel?.refreshSessions() },
                                         onOpenScreen = { row -> openBotScreen(row.profile.name, row.profile.displayName) },

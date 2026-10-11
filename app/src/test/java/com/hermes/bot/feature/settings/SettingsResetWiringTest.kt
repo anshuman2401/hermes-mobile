@@ -81,6 +81,6 @@ class SettingsResetWiringTest {
         )
         // Composition-root seam exists (FGU-004).
         assertTrue(container.contains("fun createSettingsViewModel()"))
-        assertTrue(container.contains("DefaultLocalDataResetCoordinator(vault = vaultStorage)"))
+        assertTrue(container.contains("DefaultLocalDataResetCoordinator(vault = vaultStorage, clearMemory = { botMemory.clear() })"))
     }
 }
