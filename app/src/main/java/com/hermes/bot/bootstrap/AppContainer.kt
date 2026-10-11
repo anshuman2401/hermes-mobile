@@ -300,6 +300,8 @@ class DefaultAppContainer(
     private val pendingInterruptFlushScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private val cameraPhotoStore by lazy { com.hermes.bot.data.attachments.AndroidCameraPhotoStore(context) }
+
     // T3 PR-2 (GUD-001 / BUG-012 rule 1): composition-time arming. Declared
     // after every lazy it touches so the delegates exist when init runs. The
     // observer must start with the container — a flush hook reachable only
@@ -362,6 +364,7 @@ class DefaultAppContainer(
             conversationCacheRepository = conversationCacheRepository,
             chatPreviewRepository = chatPreviewRepository,
             photoAttachmentReader = ContentResolverPhotoAttachmentReader { context.contentResolver },
+            cameraPhotoStore = cameraPhotoStore,
             documentAttachmentReader = ContentResolverDocumentAttachmentReader { context.contentResolver },
             slashCommands = com.hermes.bot.data.commands.DefaultSlashCommandRepository(gatewayAdapter, sessionRepository),
             contextUsageRepository = com.hermes.bot.data.context.DefaultContextUsageRepository(gatewayAdapter, sessionRepository),

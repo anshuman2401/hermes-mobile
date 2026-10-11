@@ -190,6 +190,12 @@ The selected bot's Bots header and its chat header open one foreground-only, ded
 
 The selected bot's Bots header also reads profile-scoped screen status while foregrounded. Its running/stopped/unknown label comes from Hermes, not the prior Android viewer state. Confirmed **Stop screen** sends one non-force `display.stop` through `BotsViewModel -> ScreenOverviewRepository -> GatewayProtocolAdapter`, then reconciles status; human-held screens cannot be force-stopped from Android. Closing the viewer remains a disconnect, separate from stopping the host desktop. Hermes does not provide per-screen CPU/RAM usage to this client.
 
+## Camera attachments in chat
+
+The chat attachment sheet offers Camera, Photos and Documents. Camera launches the system camera into a temporary app-private JPEG, then shows Retake and Use photo. `ChatScreen -> ChatViewModel -> CameraCaptureController -> CameraPhotoStore` owns capture and review; confirmation delegates to the existing `ChatAttachmentController -> SessionRepository` upload path. Sending the prompt stays explicit. Photos and Documents retain their existing picker paths.
+
+Capture ownership is memory-only and bound to the displayed durable/runtime pair and attachment readiness. One opaque Activity-result token survives rotation; URI, image and preview never enter saved state, encrypted drafts or transcript caches. Rotation does not relaunch the camera. The external camera may background the Activity; backgrounding review, route exit, history reload, disconnect or owner invalidation discards unconfirmed captures. A separate non-exported FileProvider exposes only the dedicated cache directory, without CAMERA or shared-storage permissions. The bounded review honors EXIF orientation. Upload completion/cancellation revokes grants and deletes the original; startup removes captures abandoned by process death. This describes source behavior; physical camera, grants, rotation and rendering still require separate device evidence.
+
 ## Foreground composer dictation
 
 The main conversation composer supports explicit microphone recording → Stop → host transcription → editable draft. VoiceDictationController owns permission/operation generations and presentation; ChatViewModel appends to the latest draft through existing encrypted draft persistence. Send remains explicit and blocked during dictation. Production direction is UI → ViewModel → VoiceDictationCoordinator/VoiceRepository → VoiceProtocolAdapter → VoiceHttpTransport. Existing adapter debt is not expanded.
