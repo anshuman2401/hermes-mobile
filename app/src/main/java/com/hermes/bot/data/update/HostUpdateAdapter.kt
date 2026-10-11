@@ -67,6 +67,7 @@ class HostUpdateAdapter(
             else HostUpdateResult.Ready(value)
         }
     } catch (cancelled: CancellationException) { throw cancelled }
+      catch (_: HostUpdateTimeoutException) { HostUpdateResult.Failed(if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.TIMEOUT) }
       catch (_: HostUpdateRefusedException) { HostUpdateResult.Failed(HostUpdateFailure.REFUSED) }
       catch (_: AuthOriginPolicyRejectedException) { HostUpdateResult.Failed(HostUpdateFailure.ORIGIN) }
       catch (_: StaleAuthenticatedResponseException) { HostUpdateResult.Failed(if (method == "POST") HostUpdateFailure.UNKNOWN else HostUpdateFailure.STALE) }

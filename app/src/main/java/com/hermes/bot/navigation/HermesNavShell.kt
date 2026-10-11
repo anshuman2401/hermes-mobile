@@ -144,7 +144,9 @@ fun HermesNavShell(
     diagnosticRing: DiagnosticRing? = null,
     workCronsViewModel: WorkCronsViewModel? = null,
     kanbanViewModel: com.hermes.bot.feature.work.KanbanViewModel? = null,
-    managedFilesViewModel: com.hermes.bot.feature.work.ManagedFilesViewModel? = null
+    managedFilesViewModel: com.hermes.bot.feature.work.ManagedFilesViewModel? = null,
+    onRememberLoginChanged: (Boolean) -> Unit = {},
+    onForgetSavedLogin: (String) -> Unit = {}
 ) {
     val channelVm: BotChannelViewModel = viewModel(factory = viewModelFactory {
         initializer { BotChannelViewModel(threadPreviewRepository = botThreadPreviewRepository) }
@@ -638,6 +640,7 @@ fun HermesNavShell(
                             onAuthenticate = onAuthenticate,
                             onUsernameChanged = onUsernameChanged,
                             onPasswordChanged = onPasswordChanged,
+                            onRememberLoginChanged = onRememberLoginChanged,
                             onLogin = onLogin,
                             onOpenSessions = {
                                 onOpenSessions()
@@ -958,6 +961,8 @@ fun HermesNavShell(
                     profiles = profilesUiState.profiles,
                     activeProfileId = profilesUiState.activeProfileId,
                     onSwitchProfile = { localId -> handleSwitchProfile(localId) },
+                    onForgetSavedLogin = onForgetSavedLogin,
+                    savedLoginMessage = connectUiState.savedLoginMessage,
                     onRemoveProfile = { localId ->
                         val wasActive = profilesUiState.activeProfileId == localId
                         onRemoveProfile(localId)

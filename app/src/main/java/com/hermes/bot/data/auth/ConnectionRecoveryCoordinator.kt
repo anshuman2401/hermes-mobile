@@ -25,6 +25,7 @@ class ConnectionRecoveryCoordinator(
     @Volatile private var completedAttempt = 0L
     private var lastOrigin: CanonicalOrigin? = null
     private var lastSucceeded = false
+    private var lastExplicitConnect = false
     private var connectedOrigin: CanonicalOrigin? = null
 
     fun invalidate() {
@@ -33,20 +34,20 @@ class ConnectionRecoveryCoordinator(
         mutablePhase.value = RecoveryPhase.IDLE
     }
 
-    suspend fun connect(origin: CanonicalOrigin, allowPassword: Boolean = true, retryPolicy: Boolean = false): Boolean {
+    suspend fun connect(origin: CanonicalOrigin, allowPassword: Boolean = true, retryPolicy: Boolean = false, explicitConnect: Boolean = false): Boolean {
         val owner = generation.get()
         val observedAttempt = completedAttempt
         return mutex.withLock {
             if (owner != generation.get()) return@withLock false
             // Waiters share failures as well as successes; a mutex alone would repeat failed passwords.
-            if (observedAttempt != completedAttempt && lastOrigin == origin) return@withLock lastSucceeded
+            if (observedAttempt != completedAttempt && lastOrigin == origin && lastExplicitConnect == explicitConnect) return@withLock lastSucceeded
             var connected = false
             try {
                 if (connectedOrigin == origin && gateway.connectionStatus.value == ConnectionStatus.CONNECTED &&
                     auth.hasValidSession(origin)) {
                     mutablePhase.value = RecoveryPhase.READY
                     connected = true
-                } else connected = performConnect(origin, owner, allowPassword, retryPolicy)
+                } else connected = performConnect(origin, owner, allowPassword, retryPolicy, explicitConnect)
                 connected
             } catch (cancelled: CancellationException) {
                 if (owner == generation.get()) mutablePhase.value = RecoveryPhase.OFFLINE
@@ -56,13 +57,15 @@ class ConnectionRecoveryCoordinator(
                 false
             } finally {
                 lastOrigin = origin
+                lastExplicitConnect = explicitConnect
                 lastSucceeded = connected && owner == generation.get()
                 completedAttempt++
             }
         }
     }
 
-    private suspend fun performConnect(origin: CanonicalOrigin, owner: Long, allowPassword: Boolean, retryPolicy: Boolean): Boolean {
+    private suspend fun performConnect(origin: CanonicalOrigin, owner: Long, allowPassword: Boolean, retryPolicy: Boolean,
+        explicitConnect: Boolean): Boolean {
         fun current() = owner == generation.get()
         fun policyFailure(): Boolean {
             val terminal = gateway.terminalFailure.value
@@ -82,7 +85,7 @@ class ConnectionRecoveryCoordinator(
                 return false
             }
             passwordUsed = true
-            val result = auth.recoverSession(origin)
+            val result = auth.recoverSession(origin, explicitConnect)
             if (!current()) return false
             if (result.isSuccess) return true
             mutablePhase.value = classify(result.exceptionOrNull())

@@ -14,6 +14,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -24,6 +25,7 @@ fun interface HostUpdateTransport {
 }
 
 class HostUpdateTransportException : IOException("Host update transport unavailable")
+class HostUpdateTimeoutException : IOException("Host update request timed out")
 
 /** Exact update routes, bounded bodies, no redirects, automatic retry, cookie jar or response cache. */
 class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpdateTransport {
@@ -38,6 +40,10 @@ class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpd
             response
         }.build()
 
+    // A forced source check can perform several upstream probes before returning headers.
+    // Keep its wait independent of ordinary status reads and the one-shot update POST.
+    private val checkClient = this.client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+
     override fun open(origin: CanonicalOrigin, path: String, method: String, headers: Map<String, String>): AuthenticatedHttpCall<InsightsResponse> {
         val route = path.substringBefore('?')
         require((method == "POST" && route == "/api/hermes/update" && path == route) ||
@@ -47,8 +53,14 @@ class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpd
             headers.forEach { (key, value) -> header(key, value) }
             header("Accept", "application/json")
         }.build()
-        val call = client.newCall(request)
-        call.timeout().timeout(if (method == "POST") 30 else 15, TimeUnit.SECONDS)
+        val isCheck = method == "GET" && route == "/api/hermes/update/check"
+        val requestClient = if (isCheck) checkClient else client
+        val call = requestClient.newCall(request)
+        call.timeout().timeout(when {
+            isCheck -> 60
+            method == "POST" -> 30
+            else -> 15
+        }, TimeUnit.SECONDS)
         return object : AuthenticatedHttpCall<InsightsResponse> {
             private val response = AtomicReference<Response?>()
             private val state = AtomicInteger(0) // 0 unclaimed, 1 body reading, 2 closed
@@ -60,7 +72,7 @@ class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpd
                 continuation.invokeOnCancellation { cancel() }
                 call.enqueue(object : Callback {
                     override fun onFailure(call: Call, e: IOException) {
-                        if (continuation.isActive) continuation.resumeWithException(HostUpdateTransportException())
+                        if (continuation.isActive) continuation.resumeWithException(transportFailure(e))
                     }
                     override fun onResponse(call: Call, received: Response) {
                         response.set(received)
@@ -73,7 +85,7 @@ class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpd
                                 if (!state.compareAndSet(0, 1)) throw HostUpdateTransportException()
                                 return suspendCancellableCoroutine { body ->
                                     body.invokeOnCancellation { call.cancel() }
-                                    client.dispatcher.executorService.execute {
+                                    requestClient.dispatcher.executorService.execute {
                                         try {
                                             val stream = received.body?.byteStream() ?: throw HostUpdateTransportException()
                                             val output = ByteArrayOutputStream()
@@ -87,8 +99,8 @@ class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpd
                                                 }
                                             }
                                             if (body.isActive) body.resume(output.toByteArray()) { _, _, _ -> }
-                                        } catch (_: Exception) {
-                                            if (body.isActive) body.resumeWithException(HostUpdateTransportException())
+                                        } catch (failure: Exception) {
+                                            if (body.isActive) body.resumeWithException(transportFailure(failure))
                                         } finally {
                                             response.getAndSet(null)?.close()
                                             state.set(2)
@@ -103,5 +115,8 @@ class OkHttpHostUpdateTransport(client: OkHttpClient = OkHttpClient()) : HostUpd
             }
         }
     }
+    private fun transportFailure(failure: Exception): IOException =
+        if (failure is InterruptedIOException) HostUpdateTimeoutException() else HostUpdateTransportException()
+
     companion object { const val MAX_BYTES = 64 * 1024 }
 }

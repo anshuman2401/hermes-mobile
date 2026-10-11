@@ -84,4 +84,44 @@ class ConversationCacheReadOwnerTest {
         assertFalse(cache.isReadOwnerCurrent(owner))
         assertEquals(ConversationCacheReadResult.Unavailable, cache.loadForReadOwner("synthetic-session", owner))
     }
+    @Test fun endpointSelectionInvalidatesPreviewObserversAndReadOwner() = runBlocking {
+        val vault = vault()
+        val otherOrigin = "http://other.example.test:9711"
+        vault.saveConnectionProfile(ConnectionProfile("synthetic-other", otherOrigin, "Synthetic other"))
+        vault.setActiveProfileId("synthetic-local")
+        val owner = requireNotNull(vault.captureConversationCacheReadOwner())
+        var invalidations = 0
+        val remove = vault.observeConversationPreviewInvalidation { invalidations++ }
+        assertTrue(vault.selectConnectionForEndpoint(otherOrigin))
+        assertEquals(1, invalidations)
+        assertFalse(vault.withConversationPreviewOwner(owner) { fail("Stale publication") })
+        assertFalse(vault.isConversationCacheReadOwnerCurrent(owner))
+        remove()
+    }
+
+    @Test fun rememberedLoginPublicationInvalidatesPreviewAuthority() = runBlocking {
+        val vault = vault()
+        val owner = requireNotNull(vault.captureConversationCacheReadOwner())
+        val loginOwner = requireNotNull(vault.captureLoginOwner(origin.originUrl))
+        var invalidations = 0
+        val remove = vault.observeConversationPreviewInvalidation { invalidations++ }
+        assertTrue(vault.commitRememberedLogin(loginOwner, credential(), "synthetic-user",
+            "synthetic-password".toCharArray(), remember = true))
+        assertTrue(invalidations > 0)
+        assertFalse(vault.withConversationPreviewOwner(owner) { fail("Stale publication") })
+        remove()
+    }
+
+    @Test fun forgettingLoginInvalidatesPreviewOwnerButPreservesCookie() = runBlocking {
+        val vault = vault()
+        val owner = requireNotNull(vault.captureConversationCacheReadOwner())
+        var invalidations = 0
+        val remove = vault.observeConversationPreviewInvalidation { invalidations++ }
+        vault.forgetRememberedLogin(origin.originUrl)
+        assertEquals(1, invalidations)
+        assertFalse(vault.withConversationPreviewOwner(owner) { fail("Stale publication") })
+        assertNotNull(vault.getAuthCredential())
+        remove()
+    }
+
 }
