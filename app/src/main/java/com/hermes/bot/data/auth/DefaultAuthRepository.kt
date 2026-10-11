@@ -49,7 +49,23 @@ class DefaultAuthRepository(
     override val sessionRejections: kotlinx.coroutines.flow.Flow<Unit> = rejections
     override suspend fun prepareLocalLogin(origin: CanonicalOrigin): Boolean = vaultStorage.prepareLocalLogin(origin.originUrl)
 
-    override suspend fun recoverSession(origin: CanonicalOrigin): Result<Unit> {
+    override suspend fun rememberedEndpoint(host: String?): CanonicalOrigin? = vaultStorage.rememberedEndpoint(host)
+    override suspend fun rememberLoginPreference(origin: CanonicalOrigin): Boolean = vaultStorage.rememberLoginPreference(origin.originUrl)
+    override suspend fun hasRememberedLogin(origin: CanonicalOrigin): Boolean = vaultStorage.hasRememberedLogin(origin.originUrl)
+    override suspend fun hasAutomaticLogin(origin: CanonicalOrigin): Boolean = vaultStorage.hasAutomaticLogin(origin.originUrl)
+    override suspend fun leaveConnection() {
+        invalidatePendingAuthentication()
+        vaultStorage.clearAuthCredential(reason = CacheEpochRotationReason.ORIGIN_REPLACED, cacheChoice = SignOutCacheChoice.KEEP)
+    }
+    override suspend fun noteSuccessfulEndpoint(origin: CanonicalOrigin) = vaultStorage.noteSuccessfulEndpoint(origin.originUrl)
+    override suspend fun selectConnectionForEndpoint(origin: CanonicalOrigin): Boolean = vaultStorage.selectConnectionForEndpoint(origin.originUrl)
+    override suspend fun forgetRememberedLogin(origin: CanonicalOrigin) {
+        invalidatePendingAuthentication()
+        vaultStorage.forgetRememberedLogin(origin.originUrl)
+    }
+
+    override suspend fun recoverSession(origin: CanonicalOrigin): Result<Unit> = recoverSession(origin, explicitConnect = false)
+    override suspend fun recoverSession(origin: CanonicalOrigin, explicitConnect: Boolean): Result<Unit> {
         val observed = vaultStorage.getAuthCredential()
         return recoveryOwner.withLock {
             try {
@@ -59,7 +75,7 @@ class DefaultAuthRepository(
                     return@withLock Result.success(Unit)
                 val owner = vaultStorage.captureLoginOwner(origin.originUrl)
                     ?: return@withLock Result.failure(AuthSessionRejectedException())
-                val remembered = vaultStorage.readRememberedLogin(owner)
+                val remembered = vaultStorage.readRememberedLogin(owner, explicitConnect)
                     ?: return@withLock Result.failure(AuthSessionRejectedException())
                 remembered.use {
                     val result = loginOwned(origin, it.username, it.password, it.provider, owner)
@@ -225,26 +241,29 @@ class DefaultAuthRepository(
         username: String,
         password: CharArray,
         provider: String
-    ): Result<AuthCredential> {
+    ): Result<AuthCredential> = login(origin, username, password, remember = true, provider = provider)
+
+    override suspend fun login(origin: CanonicalOrigin, username: String, password: CharArray,
+        remember: Boolean, provider: String): Result<AuthCredential> {
         try {
             val owner = vaultStorage.captureLoginOwner(origin.originUrl)
                 ?: return Result.failure(IllegalStateException("Credential storage unavailable"))
             val previous = vaultStorage.activeAccessPartition()
-            val result = loginOwned(origin, username, password, provider, owner)
+            val result = loginOwned(origin, username, password, provider, owner, remember)
             if (result.isSuccess && previous != vaultStorage.activeAccessPartition()) localRevision.update { it + 1 }
             return result
         } finally { password.fill('0') }
     }
 
     private suspend fun loginOwned(origin: CanonicalOrigin, username: String, password: CharArray,
-        provider: String, owner: com.hermes.bot.data.local.LoginOwner): Result<AuthCredential> {
+        provider: String, owner: com.hermes.bot.data.local.LoginOwner, remember: Boolean = true): Result<AuthCredential> {
         val retainedPassword = password.copyOf()
-        try { return performPasswordLogin(origin, username, password, provider, owner, retainedPassword) }
+        try { return performPasswordLogin(origin, username, password, provider, owner, retainedPassword, remember) }
         finally { retainedPassword.fill('\u0000'); password.fill('0') }
     }
 
     private suspend fun performPasswordLogin(origin: CanonicalOrigin, username: String, password: CharArray,
-        provider: String, owner: com.hermes.bot.data.local.LoginOwner, retainedPassword: CharArray): Result<AuthCredential> {
+        provider: String, owner: com.hermes.bot.data.local.LoginOwner, retainedPassword: CharArray, remember: Boolean): Result<AuthCredential> {
         // Preflight check before credential exposure per ADR-0003 & RPR-003
         val preflightResult = checkStatus(origin)
         if (preflightResult.isFailure) {
@@ -356,7 +375,7 @@ class DefaultAuthRepository(
         )
 
         try {
-            if (!vaultStorage.commitRememberedLogin(owner, credential, username, retainedPassword))
+            if (!vaultStorage.commitRememberedLogin(owner, credential, username, retainedPassword, remember))
                 return Result.failure(StaleAuthenticatedResponseException())
         } catch (cancelled: CancellationException) {
             throw cancelled

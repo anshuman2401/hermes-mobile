@@ -44,6 +44,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,7 +60,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hermes.bot.BuildConfig
@@ -89,7 +91,9 @@ fun SettingsScreen(
     onOpenAnalytics: () -> Unit = {},
     onOpenHostLogs: () -> Unit = {},
     profileSwitcher: @Composable (() -> Unit)? = null,
-    isHostConnected: Boolean = !connectedOrigin.isNullOrBlank()
+    isHostConnected: Boolean = !connectedOrigin.isNullOrBlank(),
+    onForgetSavedLogin: (String) -> Unit = {},
+    savedLoginMessage: String? = null
 ) {
     SettingsAtelierTheme(currentTheme) {
         var presentation by remember(activeProfileId) { mutableStateOf(SettingsPresentationState()) }
@@ -203,6 +207,7 @@ fun SettingsScreen(
                         if (profiles.isEmpty()) {
                             Text("No saved connections. Add a connection to get started.")
                         }
+                        savedLoginMessage?.let { Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
                         profiles.forEach { profile ->
                             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(ProfileRemoveConfirmationPolicy.displayLabel(profile), style = MaterialTheme.typography.titleMedium)
@@ -218,6 +223,8 @@ fun SettingsScreen(
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
                                     modifier = Modifier.defaultMinSize(minHeight = 48.dp)
                                 ) { Text("Switch") }
+                                OutlinedButton(onClick = { onForgetSavedLogin(profile.localId) },
+                                    modifier = Modifier.defaultMinSize(minHeight = 48.dp)) { Text("Forget saved login") }
                                 if (ProfileRemoveConfirmationPolicy.canRemove(profiles.size)) OutlinedButton(
                                     onClick = { presentation = presentation.requestRemoval(profile.localId, profiles.size) },
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),

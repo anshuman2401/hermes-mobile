@@ -172,6 +172,8 @@ fun HermesBotAppRoot(
         onAuthenticate = { effectiveConnectVm.authenticate() },
         onUsernameChanged = { effectiveConnectVm.updateUsername(it) },
         onPasswordChanged = { effectiveConnectVm.updatePassword(it) },
+        onRememberLoginChanged = { effectiveConnectVm.updateRememberLogin(it) },
+        onForgetSavedLogin = { effectiveConnectVm.forgetSavedLogin(it) },
         onLogin = { effectiveConnectVm.login() },
         onOpenSessions = { /* Nav shell transitions to Sessions */ },
         onRetry = { effectiveConnectVm.retry() },

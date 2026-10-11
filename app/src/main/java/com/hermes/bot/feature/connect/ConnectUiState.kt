@@ -80,6 +80,8 @@ data class ConnectUiState(
     // Login form fields
     val usernameDraft: String = "",
     val passwordDraft: String = "",
+    val rememberLogin: Boolean = true,
+    val savedLoginMessage: String? = null,
     val loginLoading: Boolean = false,
     val loginError: String? = null
 ) {
