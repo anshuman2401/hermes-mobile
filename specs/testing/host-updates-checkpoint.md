@@ -33,3 +33,17 @@ Follow-up behavior: only the update-check GET receives a 60-second read and tota
 Follow-up focused run: PASS (exit 0), 23 tests, 0 failures, 0 errors, 0 skips. Includes slow check headers, status header/body timeouts, unknown one-shot POST outcomes and status-timeout fallback.
 
 Follow-up full verifier: PASS (exit 0), 2,702 tests across 342 suites, zero failures/errors/skips. Lint: 33 findings (29 Warning, 4 Hint), no errors. Debug APK assembly and `git diff --check`: PASS. Final clean-candidate gate and Git/APK provenance are recorded in the follow-up PR. Device/emulator and deployed-host checks: NOT RUN.
+
+## Foreground read retries
+
+Owner request: retry failed Host updates reads every five seconds. Add this to the existing timeout follow-up branch/PR; the final PR describes both changes.
+
+Retries wait five seconds after a completed transient read failure (TIMEOUT/UNAVAILABLE), or after a git installation reports its upstream availability unknown. A transient action-status failure also retries when fallback version data succeeded. Attempts run serially within the page-owned job; slow requests never overlap. UI announces the next retry, and manual Check again replaces the pending timer. Success, leaving/backgrounding the page, changed captured owner, auth/origin/stale failures, and unsupported/malformed responses stop retrying. Uncaptured configuration/authority failures are not treated as transient network checks. Running-action status polling remains separate. Update POSTs and ambiguous outcomes are never automatically resubmitted. Exact owner/auth checks, memory-only data, transport security and persistence remain unchanged.
+
+Focused selectors chosen before Gradle: `com.hermes.bot.feature.settings.HostUpdateViewModelTest` and `com.hermes.bot.data.update.*`. Cadence, repeat-until-success, serial requests, fallback status recovery, manual replacement, lifecycle/owner stops, permanent failures, source-unavailable handling, and unknown POST protection use virtual time or explicit suspension; no live host or credentials.
+
+First retry-focused run: PASS (exit 0), 31 tests, zero failures/errors/skips. A review then found the previous status failure could survive into a new thrown read failure; clear it at the start of each owned attempt and add a recovery regression. Rerun focused checks for these changed inputs before the full gate.
+
+Final retry-focused run: PASS (exit 0), 32 tests, 0 failures, 0 errors, 0 skips.
+
+Retry full verifier: PASS (exit 0), 2,711 tests across 342 suites, zero failures/errors/skips; lint 33 findings (29 Warning, 4 Hint), no errors. Debug assembly and `git diff --check`: PASS. Main advanced with endpoint-login changes while verification queued; shared authenticated-exchange signatures remain unchanged, and merge-tree integration is checked after committing. Candidate tests run on this branch, not an executed combined merge tree. Final-candidate revision/APK provenance is recorded in updated PR #12. Device/emulator and deployed-host checks: NOT RUN.

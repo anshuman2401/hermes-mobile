@@ -143,6 +143,10 @@ private fun HostUpdateScreen(
                     Text(failure.message, Modifier.padding(top = 14.dp), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error)
                 }
+                if (state.retryScheduled) {
+                    Text("Trying again in 5 seconds…", Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 val check = state.check
                 if (check != null && check.available && check.changes.isNotEmpty()) {
                     Text("WHAT’S CHANGED", Modifier.padding(top = 24.dp, bottom = 10.dp).semantics { heading() },
