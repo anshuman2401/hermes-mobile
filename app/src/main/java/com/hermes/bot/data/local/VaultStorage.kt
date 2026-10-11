@@ -35,6 +35,14 @@ sealed interface WorkspaceRecoveryOwnerResult {
 }
 enum class WorkspaceClearResult { Applied, Stale, Failed, Unsupported }
 
+/** Local read authority; cookie renewal cannot change this owner. Never persist or display it. */
+class ConversationCacheReadOwner internal constructor(
+    internal val partition: CacheAccessPartition,
+    internal val selectedContext: String?,
+    internal val loginGeneration: Long,
+    internal val cacheGeneration: Long
+) { override fun toString() = "ConversationCacheReadOwner([redacted])" }
+
 /**
  * The one linearization point shared by connection invalidation and the final
  * profile replacement. Its critical sections intentionally contain no suspension.
@@ -309,6 +317,13 @@ interface VaultStorage : CacheLifecycleStore {
         storedSessionId: String,
         nowMillis: Long = System.currentTimeMillis()
     ): CacheReadResult<ConversationCacheV2> = CacheReadResult.Absent
+
+    /** Unsupported stores cannot authorize a connected cache preview. */
+    suspend fun captureConversationCacheReadOwner(): ConversationCacheReadOwner? = null
+    suspend fun isConversationCacheReadOwnerCurrent(owner: ConversationCacheReadOwner): Boolean = false
+    suspend fun readConversationSnapshotForOwner(
+        storedSessionId: String, owner: ConversationCacheReadOwner
+    ): CacheReadResult<ConversationCacheV2> = CacheReadResult.Unavailable
 
     /**
      * Atomically REPLACE the snapshot for [cache.durableSessionId] under

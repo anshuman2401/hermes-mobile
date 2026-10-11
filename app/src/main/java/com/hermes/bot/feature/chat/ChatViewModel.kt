@@ -2036,19 +2036,11 @@ class ChatViewModel(
                     fun previewCurrent() = !historyDisposed && generation == historyGeneration &&
                         _uiState.value.isInitialLoading && admittedSocket == gatewayProtocolAdapter?.connectionGeneration &&
                         gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED
-                    if (scope != null) {
-                        val previewBudget = StoredHistoryBudget(scope)
-                        serveConversationSnapshotIfPresent(sessionId, scope.lease, scope.selectedContext, preview = true) {
-                            previewCurrent() && scope.current && repo.isStoredHistoryPublicationCurrent(scope, previewBudget) &&
-                                previewCurrent() && scope.current
-                        }
-                    } else {
-                        val cache = conversationCacheRepository ?: return@preview
-                        val owner = previewOwner ?: return@preview
-                        val selected = (owner.selection as? com.hermes.bot.data.local.SelectedContextReadResult.Selected)?.name
-                        serveConversationSnapshotIfPresent(sessionId, owner.lease, selected, preview = true) {
-                            previewCurrent() && cache.isReadOwnerCurrent(owner) && previewCurrent()
-                        }
+                    // Local cache ownership survives this read's cookie renewal; it never
+                    // borrows the REST budget or waits for a network header decision.
+                    val owner = previewOwner ?: return@preview
+                    serveConversationSnapshotIfPresent(sessionId, preview = true, readOwner = owner) {
+                        previewCurrent()
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { /* Cache failures never cancel the host read. */ }
@@ -2878,11 +2870,13 @@ class ChatViewModel(
     private suspend fun serveConversationSnapshotIfPresent(durableId: String,
         expected: com.hermes.bot.data.local.AuthCredentialLease? = null, selectedContext: String? = null,
         preview: Boolean = false,
+        readOwner: com.hermes.bot.data.local.ConversationCacheReadOwner? = null,
         current: suspend () -> Boolean = { true }): Boolean {
         val cacheRepo = conversationCacheRepository ?: return false
         if (!current()) return false
         val snapshotCache = try {
-            when (val read = if (expected == null) cacheRepo.load(durableId)
+            when (val read = if (readOwner != null) cacheRepo.loadForReadOwner(durableId, readOwner)
+                else if (expected == null) cacheRepo.load(durableId)
                 else cacheRepo.loadScoped(durableId, expected, selectedContext)) {
                 is ConversationCacheReadResult.Snapshot -> read.value
                 else -> return false
@@ -2919,7 +2913,7 @@ class ChatViewModel(
         } catch (_: Exception) {
             null
         }?.takeUnless { it.isBlank() || it == UNTITLED_CONVERSATION_HEADER_LABEL }
-        if (!current()) return false
+        if (!current() || (readOwner != null && !cacheRepo.isReadOwnerCurrent(readOwner)) || !current()) return false
         skippedHistoryCount = skippedBlanks
         oldestRenderedHistoryRow = messages.firstOrNull()
         _uiState.update { current ->

@@ -72,6 +72,7 @@ class EncryptedVault(
 
     private val mutex = Mutex()
     private val loginGeneration = java.util.concurrent.atomic.AtomicLong()
+    private val conversationCacheReadGeneration = java.util.concurrent.atomic.AtomicLong()
 
     // Separate, origin-bound local authority. A tombstone prevents legacy resurrection.
     private class LocalLogin(val origin: String, val epoch: String, val username: String?,
@@ -3620,6 +3621,52 @@ class EncryptedVault(
 
     // --- PR-3 public surface (defaults live on VaultStorage) ---
 
+    override suspend fun captureConversationCacheReadOwner(): ConversationCacheReadOwner? = mutex.withLock {
+        withContext(ioDispatcher) {
+            ensureMigrated()
+            val selection = selectedContextAuthorityInternal()
+            if (selection !is SelectedContextReadResult.Selected && selection != SelectedContextReadResult.Absent)
+                return@withContext null
+            val partition = (resolveAccessPartitionInternal() as? CacheAccessPartitionResult.Available)?.partition
+                ?: return@withContext null
+            ConversationCacheReadOwner(partition, (selection as? SelectedContextReadResult.Selected)?.name,
+                loginGeneration.get(), conversationCacheReadGeneration.get())
+        }
+    }
+
+    private fun conversationCacheReadOwnerCurrent(owner: ConversationCacheReadOwner): Boolean {
+        fun generationCurrent() = owner.loginGeneration == loginGeneration.get() &&
+            owner.cacheGeneration == conversationCacheReadGeneration.get()
+        if (!generationCurrent()) return false
+        val selection = selectedContextAuthorityInternal()
+        val selected = when (selection) {
+            is SelectedContextReadResult.Selected -> selection.name
+            SelectedContextReadResult.Absent -> null
+            else -> return false
+        }
+        return selected == owner.selectedContext &&
+            (resolveAccessPartitionInternal() as? CacheAccessPartitionResult.Available)?.partition == owner.partition &&
+            generationCurrent()
+    }
+
+    override suspend fun isConversationCacheReadOwnerCurrent(owner: ConversationCacheReadOwner): Boolean = mutex.withLock {
+        withContext(ioDispatcher) { conversationCacheReadOwnerCurrent(owner) }
+    }
+
+    override suspend fun readConversationSnapshotForOwner(
+        storedSessionId: String, owner: ConversationCacheReadOwner
+    ): CacheReadResult<ConversationCacheV2> = mutex.withLock {
+        withContext(ioDispatcher) {
+            ensureMigrated()
+            if (!conversationCacheReadOwnerCurrent(owner)) return@withContext CacheReadResult.Unavailable
+            val read = readConversationRecordInternal(owner.partition, storedSessionId, wallClockMillis())
+            // Profile/selection/cache mutations share this mutex. Only the external
+            // cancellation of login owners can interleave with this disk read.
+            if (owner.loginGeneration == loginGeneration.get() &&
+                owner.cacheGeneration == conversationCacheReadGeneration.get()) read else CacheReadResult.Unavailable
+        }
+    }
+
     override suspend fun readConversationSnapshot(
         partition: CacheAccessPartition,
         storedSessionId: String,
@@ -3862,12 +3909,14 @@ class EncryptedVault(
         profileLocalId: String,
         originSha256: String
     ): Unit = mutex.withLock {
+        conversationCacheReadGeneration.incrementAndGet()
         withContext(ioDispatcher) {
             purgeConversationCacheInternal(profileLocalId, originSha256)
         }
     }
 
     override suspend fun clearConversationCache(): Unit = mutex.withLock {
+        conversationCacheReadGeneration.incrementAndGet()
         withContext(ioDispatcher) {
             clearConversationCacheInternal()
         }
@@ -3905,6 +3954,7 @@ class EncryptedVault(
      * diagnostics vocabulary (OQ-02).
      */
     override suspend fun clearAllCacheRecords(): CacheClearResult = mutex.withLock {
+        conversationCacheReadGeneration.incrementAndGet()
         withContext(ioDispatcher) {
             var phase = CacheClearResiduePhase.CONVERSATION_CACHE
             try {

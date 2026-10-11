@@ -490,6 +490,7 @@ internal class StoredChatFixture(folder: File, private val dispatcher: Coroutine
     var metadata = "\"running\":false,\"status\":\"idle\""
     var body = storedBody()
     var cookie = false
+    var cookieValue = "synthetic-rotated"
     var bodyGate: CompletableDeferred<Unit>? = null
     var bodyEntered: CompletableDeferred<Unit>? = null
     var nonCooperativeBody = false
@@ -505,7 +506,7 @@ internal class StoredChatFixture(folder: File, private val dispatcher: Coroutine
                 override fun cancel() {}
                 override suspend fun awaitHeaders(): StoredHistoryResponse = object : StoredHistoryResponse {
                     override val statusCode = 200
-                    override val headers = if (cookie) mapOf("Set-Cookie" to listOf("session=synthetic-rotated; Path=/")) else emptyMap()
+                    override val headers = if (cookie) mapOf("Set-Cookie" to listOf("session=$cookieValue; Path=/")) else emptyMap()
                     override suspend fun readBoundedBody(): ByteArray {
                         bodyEntered?.complete(Unit)
                         if (nonCooperativeBody) withContext(NonCancellable) { bodyGate?.await() }
