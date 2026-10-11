@@ -352,6 +352,79 @@ class ChatQueueViewModelTest {
         assertEquals(10, chat.uiState.value.queue.waiting.size)
         assertNotNull(chat.uiState.value.queue.pause)
     }
+    @Test fun lateTerminalAfterReconnectReleasesUnknownQueueWithoutResending() = runTest {
+        val adapter = FakeGatewayProtocolAdapter()
+        val store = MemoryChatQueueStore()
+        store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic first")))))
+        val chat = vm(adapter, store, sessions = idleEvidence())
+        advanceUntilIdle(); chat.resumeQueue(); advanceUntilIdle()
+        chat.updateDraft("synthetic later"); chat.submitPrompt(); advanceUntilIdle()
+        adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.OFFLINE
+        advanceUntilIdle()
+        assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
+        adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.CONNECTED
+        advanceUntilIdle()
+        adapter.eventFlow.emit(GatewayEvent.MessageComplete("runtime-100", 1L, "synthetic completed reply", "complete"))
+        advanceUntilIdle()
+        assertEquals(2, adapter.submitPromptCallCount)
+        assertEquals("synthetic later", adapter.lastSubmittedText)
+        assertEquals(QueueItemState.STREAMING, chat.uiState.value.queue.active?.state)
+        assertTrue(chat.uiState.value.queue.waiting.isEmpty())
+    }
+
+    @Test fun reconnectRecoversAdmittedCompletedPromptAndSendsOnlyLaterWork() = runTest {
+        val adapter = FakeGatewayProtocolAdapter()
+        val sessions = ChatComposerSingleFlightTest.SingleFlightSessionRepository()
+        val store = MemoryChatQueueStore()
+        store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic first")))))
+        val chat = vm(adapter, store, sessions = idleEvidence(sessions))
+        advanceUntilIdle(); chat.resumeQueue(); advanceUntilIdle()
+        val firstAttempt = chat.uiState.value.queue.active!!.pendingTurnId
+        chat.updateDraft("synthetic later"); chat.submitPrompt(); advanceUntilIdle()
+        adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.OFFLINE
+        advanceUntilIdle()
+        assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
+        sessions.resumeOutcome = Result.success(SessionResumeResult("runtime-100", "sess-100", 2,
+            messages = listOf(SessionMessage("user", "synthetic first"), SessionMessage("assistant", "synthetic reply")),
+            activityEvidence = ResumeActivityEvidence.NON_RUNNING))
+        adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.CONNECTED
+        advanceUntilIdle()
+        assertEquals(2, adapter.submitPromptCallCount)
+        assertEquals("synthetic later", adapter.lastSubmittedText)
+        assertTrue(chat.uiState.value.queue.waiting.isEmpty())
+        assertEquals(QueueItemState.STREAMING, chat.uiState.value.queue.active?.state)
+        assertNotEquals(firstAttempt, chat.uiState.value.queue.active?.pendingTurnId)
+    }
+
+    @Test fun refreshCannotReleaseQueueWithoutIdleAndReplyEvidence() = runTest {
+        for (activity in ResumeActivityEvidence.entries) {
+            val adapter = FakeGatewayProtocolAdapter()
+            val sessions = ChatComposerSingleFlightTest.SingleFlightSessionRepository()
+            val store = MemoryChatQueueStore()
+            store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic first")))))
+            val chat = vm(adapter, store, sessions = idleEvidence(sessions))
+            advanceUntilIdle(); chat.resumeQueue(); advanceUntilIdle()
+            chat.updateDraft("synthetic later"); chat.submitPrompt(); advanceUntilIdle()
+            adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.OFFLINE
+            advanceUntilIdle()
+            sessions.resumeOutcome = Result.success(SessionResumeResult("runtime-100", "sess-100", 1,
+                messages = listOf(SessionMessage("user", "synthetic first")), activityEvidence = activity))
+            adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.CONNECTED
+            advanceUntilIdle()
+            chat.checkQueueStatus(); advanceUntilIdle()
+            assertEquals(1, adapter.submitPromptCallCount)
+            assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
+            assertEquals(1, chat.uiState.value.queue.waiting.size)
+            sessions.resumeOutcome = Result.success(SessionResumeResult("runtime-100", "sess-100", 2,
+                messages = listOf(SessionMessage("user", "synthetic first"), SessionMessage("assistant", "synthetic reply")),
+                activityEvidence = ResumeActivityEvidence.NON_RUNNING))
+            chat.checkQueueStatus(); advanceUntilIdle()
+            assertEquals(2, adapter.submitPromptCallCount)
+            assertEquals("synthetic later", adapter.lastSubmittedText)
+            assertTrue(chat.uiState.value.queue.waiting.isEmpty())
+        }
+    }
+
     @Test fun disconnectDuringStreamHoldsActiveOutcomeAndNeverResendsAfterReconnect() = runTest {
         val adapter = FakeGatewayProtocolAdapter(); val store = MemoryChatQueueStore()
         store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic first")))))
@@ -366,6 +439,21 @@ class ChatQueueViewModelTest {
         assertEquals(1, adapter.submitPromptCallCount)
         assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
         assertEquals(1, chat.uiState.value.queue.waiting.size)
+    }
+
+    @Test fun reconnectPreservesExplicitPauseForUnsentWaitingWork() = runTest {
+        val adapter = FakeGatewayProtocolAdapter()
+        val chat = vm(adapter, sessions = idleEvidence())
+        advanceUntilIdle()
+        chat.pauseQueue(); advanceUntilIdle()
+        chat.updateDraft("/status"); chat.submitPrompt(); advanceUntilIdle()
+        adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.OFFLINE
+        advanceUntilIdle()
+        adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.CONNECTED
+        advanceUntilIdle()
+        assertEquals(QueuePause.USER, chat.uiState.value.queue.pause)
+        assertEquals(1, chat.uiState.value.queue.waiting.size)
+        assertEquals(0, adapter.submitPromptCallCount)
     }
 
     @Test fun cancelledCommandOnDisconnectRetainsUnknownOutcomeAndLaterPrompt() = runTest {

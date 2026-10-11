@@ -32,7 +32,7 @@ class ChatQueuePresentationTest {
         assertEquals(0, writes)
 
         assertTrue(restored.resume())
-        assertEquals(QueueControl.PAUSE, queueControl(restored.state.value, false))
+        assertEquals(QueueControl.NONE, queueControl(restored.state.value, false))
         restored.runNext({ true }) { writes++; QueueExecutionResult.COMPLETE }
         assertEquals(1, writes)
         assertEquals(QueueControl.NONE, queueControl(restored.state.value, false))
