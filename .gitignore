@@ -51,3 +51,9 @@ google-services.json
 *.credentials
 *.secret
 *.secrets
+
+# Local development checkpoints and task evidence
+/specs/design/**/checkpoint.md
+/specs/testing/*-checkpoint.md
+/specs/plans/
+/specs/test-evidence/

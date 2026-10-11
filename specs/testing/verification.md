@@ -87,7 +87,7 @@ There is no connected-device gate, no `--device` flag, and no `ANDROID_SERIAL` h
 
 The sequencing policy lives in [repository AGENTS.md](../../AGENTS.md#privacy-and-tests). This section supplies technical commands, not another approval or delivery policy.
 
-Choose selectors from the actual implementation, tests and directly affected consumers before the first development run. Record them in the existing feature checkpoint. A focused command limits **test execution**; it does not promise that Gradle will compile only those test files or avoid necessary module/dependency compilation. No time saving is guaranteed without measuring the task results.
+Choose selectors from the actual implementation, tests and directly affected consumers before the first development run. Record them in an ignored local task receipt or the private development archive; include the executed checks and results in the pull request. A focused command limits **test execution**; it does not promise that Gradle will compile only those test files or avoid necessary module/dependency compilation. No time saving is guaranteed without measuring the task results.
 
 A bounded turn-coordination change can start with:
 
