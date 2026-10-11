@@ -114,7 +114,7 @@ class ChatUiPresentationSourceContractTest {
     @Test
     fun composer_streamingActionIsSolidSquareInsideCenteredCompactCircle() {
         val composer = source("com/hermes/bot/feature/chat/components/ChatComposer.kt")
-        val action = composer.substring(composer.indexOf("val buttonEnabled"))
+        val action = composer.substring(composer.indexOf("if (edit == null) IconButton("))
         val visualStart = action.indexOf("Box(")
         assertTrue("action must contain a visual Box", visualStart >= 0)
         val parent = action.substring(0, visualStart)
@@ -324,7 +324,7 @@ class ChatUiPresentationSourceContractTest {
         val attachment = composer.substring(addButtonStart, composer.indexOf("val fieldShape"))
         val attachmentParent = attachment.substring(0, attachment.indexOf("Icon("))
         val addGlyph = attachment.substring(attachment.indexOf("Icon("))
-        val action = composer.substring(composer.indexOf("val buttonEnabled"))
+        val action = composer.substring(composer.indexOf("if (edit == null) IconButton("))
         val send = action.substring(action.indexOf("PaperPlaneIcon("))
         val spinner = action.substring(action.indexOf("if (isSubmitting && !queueEnabled) {"), action.indexOf("} else if (showStop) {"))
         val readiness = composer.substring(composer.indexOf("val canSend"), composer.indexOf("Column("))
@@ -337,7 +337,7 @@ class ChatUiPresentationSourceContractTest {
         assertTrue("send tint preserves readiness", send.contains("tint = if (canSend) MaterialTheme.colorScheme.onPrimary") && send.contains("else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)"))
         assertTrue("attachment callback preserved", attachmentParent.contains("onClick = { onAttachmentClick?.invoke() }"))
         assertTrue("attachment disabled state preserved", attachmentParent.contains("enabled = onAttachmentClick != null"))
-        assertTrue("streaming still enables Stop even while submitting", action.contains("val buttonEnabled = if (showStop) true else canSend"))
+        assertTrue("streaming still enables Stop even while submitting", composer.contains("val buttonEnabled = if (showStop) true else canSend"))
         assertTrue("only slash commands replace Stop with Send", composer.contains("val showStop = isStreaming && !isSlashCommand"))
         assertTrue("submitting spinner precedes streaming square", spinner.contains("CircularProgressIndicator(") && spinner.contains("Modifier.size(20.dp)") && spinner.contains("strokeWidth = 2.dp") && spinner.contains("color = MaterialTheme.colorScheme.onPrimary"))
         assertTrue("explicit readiness stays authoritative", readiness.contains("val canSend = isComposerReady ?: (") && readiness.contains("draftText.isNotBlank() || pendingImages.isNotEmpty()") && readiness.contains("!isSubmitting &&") && readiness.contains("!isStreaming &&") && readiness.contains("!isSendBlocked"))

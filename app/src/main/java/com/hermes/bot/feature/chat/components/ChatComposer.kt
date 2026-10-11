@@ -267,9 +267,6 @@ fun ChatComposer(
             }
         }
 
-        if (queueEnabled && isStreaming && edit == null) {
-            TextButton(onClick = onStopStreaming) { Text("Stop generating") }
-        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -399,6 +396,16 @@ fun ChatComposer(
             )
 
             val buttonEnabled = if (showStop) true else canSend
+            if (queueEnabled && isStreaming && edit == null) {
+                IconButton(onClick = onStopStreaming, modifier = Modifier.size(48.dp)
+                    .semantics { contentDescription = "Stop generating" }) {
+                    Box(Modifier.size(44.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.error), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(14.dp).background(MaterialTheme.colorScheme.onError, RoundedCornerShape(2.dp)))
+                    }
+                }
+            }
+
             if (edit == null) IconButton(
                 onClick = if (showStop) onStopStreaming else onSend,
                 enabled = buttonEnabled,

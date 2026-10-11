@@ -325,7 +325,7 @@ data class ChatUiState(
             savedSnapshotCapturedAtMillis != null -> "Reconnect to add attachments to this saved snapshot."
             runtimeSessionId.isNullOrBlank() || submitBlockedReason == SubmitBlockedReason.NO_RUNTIME ->
                 null
-            queueEnabled && (queue.waiting.isNotEmpty() || queue.active != null) -> "Attachments are available when the queue is empty and chat is idle."
+            queueEnabled && (queue.waiting.isNotEmpty() || queue.active != null) -> null
             !isAttachmentConnectionAvailable -> "Reconnect to add attachments."
             else -> null
         }
