@@ -35,6 +35,9 @@ Gradle and verifier invocations use the existing shared Gradle lock. Automated v
 - First clean committed candidate: final-candidate gate PASS — 2715 tests, 0 failures, 0 errors, 0 skipped, 342 suites; lint 29 warnings and 4 hints, 0 errors; debug APK assembled; 12 executed Gradle tasks, 44 up-to-date. This result is superseded by the encrypted-preference read-failure handling correction.
 - Focused Connect/navigation checks after that correction: PASS — 203 tests, 0 failures, 0 errors, 0 skipped, 33 suites; 5 executed Gradle tasks, 22 up-to-date. Endpoint Connect coverage now contains 15 tests, including failed reads during Connect and profile switching.
 
+- Preference-read correction clean candidate: final-candidate gate PASS — 2717 tests, 0 failures, 0 errors, 0 skipped, 342 suites; lint 29 warnings and 4 hints, 0 errors; debug APK assembled; 12 executed tasks, 44 up-to-date. This result is superseded by integration with the subsequent chat-preview changes on main.
+- Main integration focused run: PASS — 577 tests, 0 failures, 0 errors, 0 skipped, 97 suites; 5 executed tasks, 22 up-to-date. Includes the affected auth/vault/Connect/settings/navigation selectors plus ChatPreviewRepositoryTest and ChatCachedHistoryPreviewTest. Three vault checks cover endpoint selection, remembered-login publication and forgetting a login against chat-preview ownership.
+
 The final committed candidate runs the full final-candidate verifier after these focused checks. Its authoritative Git revision, actual totals, lint severities, report locations and APK provenance are recorded in the ignored build receipt `app/build/reports/endpoint-login-verification.json`, without runtime logs or machine-specific paths. Earlier development runs are not evidence of the final candidate.
 
 ## Evidence boundaries
