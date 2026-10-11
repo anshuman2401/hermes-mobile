@@ -67,6 +67,8 @@ class ChatQueueDeviceTest {
         compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
         compose.onNodeWithText("Synthetic held prompt").assertIsDisplayed()
         compose.onNodeWithText("Resume queue").assertIsDisplayed()
+        assertTrue(compose.onNodeWithText("Resume queue").fetchSemanticsNode().boundsInRoot.bottom <=
+            compose.onNodeWithTag("queued-prompt-pills").fetchSemanticsNode().boundsInRoot.top)
         compose.onNodeWithText("Review queued messages").assertDoesNotExist()
         compose.onNodeWithText("Queued messages").assertDoesNotExist()
         compose.onNodeWithText("Paused · restored queue").assertDoesNotExist()
@@ -100,7 +102,9 @@ class ChatQueueDeviceTest {
             assertEquals("Synthetic edited", (model.uiState.value.queue.waiting.first().payload as QueuePayload.Prompt).text) }
         compose.onNodeWithContentDescription("Cancel queued item 2").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, model.uiState.value.queue.waiting.size) }
-        compose.onNodeWithText("Stop generating").assertIsDisplayed()
+        compose.onNodeWithText("Stop generating").assertDoesNotExist()
+        compose.onNodeWithText("Attachments are available when the queue is empty and chat is idle.").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Stop generating").assertIsDisplayed()
     }
     @Test fun uncertainActiveSubmissionKeepsExplicitReviewWithInlineWaitingPrompt() {
         show(listOf(QueueItem(payload = QueuePayload.Prompt("Synthetic waiting prompt"))), streaming = false,
@@ -131,7 +135,9 @@ class ChatQueueDeviceTest {
         show()
         compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
         compose.onNodeWithText("Review queued messages").assertDoesNotExist()
-        compose.onNodeWithText("Stop generating").assertIsDisplayed()
+        compose.onNodeWithText("Stop generating").assertDoesNotExist()
+        compose.onNodeWithText("Attachments are available when the queue is empty and chat is idle.").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Stop generating").assertIsDisplayed()
     }
     @Test fun longPromptStaysAboveComposerAndCancelEditKeepsOriginal() {
         val text = "Synthetic long prompt ".repeat(20)
@@ -157,12 +163,14 @@ class ChatQueueDeviceTest {
         compose.onNodeWithContentDescription("Add to queue").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, model.uiState.value.queue.waiting.size)
             assertEquals("", model.uiState.value.composerDraft); assertTrue(model.uiState.value.isStreaming) }
-        compose.onNodeWithText("Stop generating").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Stop generating").assertIsDisplayed().performClick()
         compose.runOnIdle { assertFalse(model.uiState.value.isStreaming)
             assertNotNull(model.uiState.value.queue.pause); assertEquals(1, model.uiState.value.queue.waiting.size) }
         compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
         compose.onNodeWithText("Synthetic new prompt").assertIsDisplayed()
         compose.onNodeWithText("Resume queue").assertIsDisplayed()
+        assertTrue(compose.onNodeWithText("Resume queue").fetchSemanticsNode().boundsInRoot.bottom <=
+            compose.onNodeWithTag("queued-prompt-pills").fetchSemanticsNode().boundsInRoot.top)
         compose.onNodeWithText("Review queued messages").assertDoesNotExist()
     }
 }

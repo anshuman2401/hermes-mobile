@@ -41,6 +41,16 @@ fun ChatQueuePresentation(state: ChatQueueState, isStreaming: Boolean, maxHeight
     var reviewing by remember { mutableStateOf(false) }
     val control = queueControl(state, isStreaming)
     LaunchedEffect(control) { if (control != QueueControl.REVIEW) reviewing = false }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
+        // Resume remains an explicit intent. Its ViewModel verifies authoritative idle
+        // evidence; showing waiting pills never releases restored or uncertain writes.
+        when (control) {
+            QueueControl.RESUME -> FilledTonalButton(onClick = onResume) { Text("Resume queue") }
+            QueueControl.PAUSE -> TextButton(onClick = onPause) { Text("Pause queue") }
+            QueueControl.REVIEW -> TextButton(onClick = { reviewing = true }) { Text("Review queued messages") }
+            QueueControl.NONE -> Unit
+        }
+    }
     if (state.waiting.isNotEmpty()) {
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight.coerceAtLeast(64.dp))
             .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)
@@ -70,14 +80,6 @@ fun ChatQueuePresentation(state: ChatQueueState, isStreaming: Boolean, maxHeight
                 }
             }
         }
-    }
-    // Resume remains an explicit intent. Its ViewModel verifies authoritative idle
-    // evidence; showing waiting pills never releases restored or uncertain writes.
-    when (control) {
-        QueueControl.RESUME -> TextButton(onClick = onResume) { Text("Resume queue") }
-        QueueControl.PAUSE -> TextButton(onClick = onPause) { Text("Pause queue") }
-        QueueControl.REVIEW -> TextButton(onClick = { reviewing = true }) { Text("Review queued messages") }
-        QueueControl.NONE -> Unit
     }
     if (reviewing && control == QueueControl.REVIEW) AlertDialog(onDismissRequest = { reviewing = false },
         confirmButton = { TextButton(onClick = { reviewing = false }) { Text("Close") } },

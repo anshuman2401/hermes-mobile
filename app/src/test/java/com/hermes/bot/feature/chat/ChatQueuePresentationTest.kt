@@ -8,6 +8,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ChatQueuePresentationTest {
+    @Test fun waitingQueueDisablesAttachmentsWithoutComposerCaption() {
+        val state = ChatUiState(runtimeSessionId = "synthetic-runtime", isInitialLoading = false,
+            queueEnabled = true, headerConnectionStatus = com.hermes.bot.domain.ConnectionStatus.CONNECTED,
+            queue = ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("Synthetic prompt")))))
+        assertFalse(state.canAttachImage)
+        assertFalse(state.canAttachFile)
+        assertNull(state.attachmentDisabledReason)
+    }
+
     @Test fun restoredWaitingIntentOffersResumeWithoutDispatching() = runTest {
         val store = MemoryChatQueueStore()
         val first = ChatQueueCoordinator(store)
