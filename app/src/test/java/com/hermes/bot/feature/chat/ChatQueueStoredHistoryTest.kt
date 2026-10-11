@@ -42,8 +42,9 @@ class ChatQueueStoredHistoryTest {
                 f.awaitLoaded(chat)
                 awaitState(chat) { it.queue.loaded }
                 chat.updateDraft("Synthetic queued first"); chat.submitPrompt()
-                val active = awaitState(chat) { it.queue.active?.state == QueueItemState.STREAMING }
-                val firstTurn = active.queue.active!!.pendingTurnId!!
+                val active = awaitState(chat) { it.isStreaming }
+                assertNull(active.queue.active)
+                val firstTurn = active.trace!!.turnId
                 chat.updateDraft("Synthetic queued second"); chat.submitPrompt()
                 awaitState(chat) { it.queue.waiting.size == 1 }
                 assertEquals(1, writes)

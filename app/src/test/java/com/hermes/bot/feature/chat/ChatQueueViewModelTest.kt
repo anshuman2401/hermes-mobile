@@ -31,8 +31,10 @@ class ChatQueueViewModelTest {
         }
     }
     private fun vm(adapter: FakeGatewayProtocolAdapter, store: ChatQueueStore = MemoryChatQueueStore(), commands: Commands = Commands(),
-        sessions: com.hermes.bot.data.session.SessionRepository = ChatComposerSingleFlightTest.SingleFlightSessionRepository()): ChatViewModel {
-        val vault = EncryptedVault(temp.newFolder(), AesGcmCipherEngine(InMemoryMasterKeyProvider()), ioDispatcher = main.testDispatcher)
+        sessions: com.hermes.bot.data.session.SessionRepository = ChatComposerSingleFlightTest.SingleFlightSessionRepository(),
+        decorateVault: (VaultStorage) -> VaultStorage = { it }): ChatViewModel {
+        val baseVault = EncryptedVault(temp.newFolder(), AesGcmCipherEngine(InMemoryMasterKeyProvider()), ioDispatcher = main.testDispatcher)
+        val vault = decorateVault(baseVault)
         // Explicit synthetic writer seam; this fake never represents platform/auth security.
         val scopedSessions = object : com.hermes.bot.data.session.SessionRepository by sessions {
             override suspend fun capturePromptSubmissionAccess(storedId: String, runtimeId: String) =
@@ -45,6 +47,51 @@ class ChatQueueViewModelTest {
             gatewayProtocolAdapter = adapter, pendingTurnLedger = PendingTurnLedger(vault), vaultStorage = vault,
             slashCommands = commands, chatQueueStore = store).also { it.setQueueVisibility(true) }
     }
+    private fun idleEvidence(sessions: com.hermes.bot.data.session.SessionRepository =
+        ChatComposerSingleFlightTest.SingleFlightSessionRepository()) =
+        object : com.hermes.bot.data.session.SessionRepository by sessions {
+            override suspend fun fetchHistorySnapshot(durableSessionId: String) =
+                sessions.fetchHistorySnapshot(durableSessionId).map {
+                    it.copy(activityEvidence = ResumeActivityEvidence.NON_RUNNING)
+                }
+        }
+
+    @Test fun idlePromptUsesDirectSendAndLeavesQueueEmpty() = runTest {
+        val adapter = FakeGatewayProtocolAdapter(); val chat = vm(adapter); advanceUntilIdle()
+        chat.updateDraft("synthetic direct")
+        assertFalse(chat.uiState.value.queuesComposerInput)
+        chat.submitPrompt(); chat.submitPrompt(); advanceUntilIdle()
+        assertEquals(1, adapter.submitPromptCallCount)
+        assertTrue(chat.uiState.value.isStreaming)
+        assertNull(chat.uiState.value.queue.active)
+        assertTrue(chat.uiState.value.queue.waiting.isEmpty())
+        assertFalse(chat.uiState.value.queue.visible)
+    }
+
+    @Test fun directTerminalWaitsForLedgerSettlementBeforeQueuedWrite() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var first = true
+        val adapter = FakeGatewayProtocolAdapter()
+        val chat = vm(adapter, decorateVault = { vault -> object : VaultStorage by vault {
+            override suspend fun updatePendingTurnState(pendingTurnId: String, newState: PendingTurnState) {
+                if (newState == PendingTurnState.RESOLVED && first) {
+                    first = false; entered.complete(Unit); release.await()
+                }
+                vault.updatePendingTurnState(pendingTurnId, newState)
+            }
+        } }); advanceUntilIdle()
+        chat.updateDraft("synthetic direct"); chat.submitPrompt(); advanceUntilIdle()
+        chat.updateDraft("synthetic queued"); chat.submitPrompt(); advanceUntilIdle()
+        adapter.eventFlow.emit(GatewayEvent.MessageComplete("runtime-100", 1L, "synthetic done", "complete"))
+        runCurrent(); entered.await()
+        assertFalse(chat.uiState.value.isStreaming)
+        assertEquals(1, adapter.submitPromptCallCount)
+        assertEquals(1, chat.uiState.value.queue.waiting.size)
+        release.complete(Unit); advanceUntilIdle()
+        assertEquals(2, adapter.submitPromptCallCount)
+        assertTrue(chat.uiState.value.queue.waiting.isEmpty())
+    }
+
     @Test fun delayedQueueReadBlocksAttachmentActionsAndDirectSendUntilKnownEmpty() = runTest {
         val saved = MemoryChatQueueStore(); val read = CompletableDeferred<Unit>()
         val delayed = object : ChatQueueStore by saved {
@@ -95,8 +142,10 @@ class ChatQueueViewModelTest {
                     entered.complete(Unit); release.await(); return null
                 }
             }
-            val chat = vm(adapter, sessions = sessions); advanceUntilIdle()
-            chat.updateDraft("synthetic prepared"); chat.submitPrompt(); runCurrent()
+            val store = MemoryChatQueueStore()
+            store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic prepared")))))
+            val chat = vm(adapter, store, sessions = idleEvidence(sessions)); advanceUntilIdle()
+            chat.resumeQueue(); runCurrent()
             entered.await(); assertTrue(chat.uiState.value.isSubmitting)
             if (stop) chat.stopStreaming() else chat.setQueueVisibility(false)
             runCurrent(); release.complete(Unit); advanceUntilIdle()
@@ -109,12 +158,13 @@ class ChatQueueViewModelTest {
 
     @Test fun rapidSendAndImeIntentAcceptOneDraftOnly() = runTest {
         val adapter = FakeGatewayProtocolAdapter(); val chat = vm(adapter); advanceUntilIdle()
+        chat.updateDraft("synthetic running"); chat.submitPrompt(); advanceUntilIdle()
         chat.pauseQueue(); advanceUntilIdle()
         chat.updateDraft("synthetic once"); chat.submitPrompt(); chat.submitPrompt(); chat.submitPrompt()
         advanceUntilIdle()
         assertEquals(1, chat.uiState.value.queue.waiting.size)
         assertEquals("synthetic once", (chat.uiState.value.queue.waiting.single().payload as QueuePayload.Prompt).text)
-        assertEquals(0, adapter.submitPromptCallCount)
+        assertEquals(1, adapter.submitPromptCallCount)
     }
 
     @Test fun terminalBeforeAdmissionWaitsForAcknowledgementThenReleasesNextPrompt() = runTest {
@@ -148,7 +198,8 @@ class ChatQueueViewModelTest {
         assertEquals(1, adapter.submitPromptCallCount)
         assertEquals(QueuePause.UNKNOWN, chat.uiState.value.queue.pause)
         assertEquals(1, chat.uiState.value.queue.waiting.size)
-        assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
+        assertNull(chat.uiState.value.queue.active)
+        assertNotNull(chat.uiState.value.pendingUnknownTurnId)
     }
 
     @Test fun errorBeforeAdmissionHoldsLaterWorkAfterAcknowledgement() = runTest {
@@ -214,10 +265,11 @@ class ChatQueueViewModelTest {
     }
     @Test fun failedDurableEnqueuePreservesDraftAndMakesNoHostWrite() = runTest {
         val store = MemoryChatQueueStore(); val adapter = FakeGatewayProtocolAdapter(); val chat = vm(adapter, store); advanceUntilIdle()
+        chat.updateDraft("synthetic running"); chat.submitPrompt(); advanceUntilIdle()
         store.failWrite = true
         chat.updateDraft("synthetic retained"); chat.submitPrompt(); advanceUntilIdle()
         assertEquals("synthetic retained", chat.uiState.value.composerDraft)
-        assertEquals(0, adapter.submitPromptCallCount)
+        assertEquals(1, adapter.submitPromptCallCount)
         assertNotNull(chat.uiState.value.queue.error)
     }
     @Test fun yoloAcknowledgementWithoutConfirmedStateDoesNotReleaseNextPrompt() = runTest {
@@ -277,8 +329,10 @@ class ChatQueueViewModelTest {
     @Test fun unknownPromptCannotBeRetriedAroundTheQueue() = runTest {
         val adapter = FakeGatewayProtocolAdapter()
         adapter.submitPromptResult = GatewayResult.Failure(GatewayFailure.SubmissionUnknown("Synthetic unknown"))
-        val chat = vm(adapter); advanceUntilIdle()
-        chat.updateDraft("synthetic uncertain"); chat.submitPrompt(); advanceUntilIdle()
+        val store = MemoryChatQueueStore()
+        store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic uncertain")))))
+        val chat = vm(adapter, store, sessions = idleEvidence()); advanceUntilIdle()
+        chat.resumeQueue(); advanceUntilIdle()
         assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
         chat.retryAmbiguousPrompt(); advanceUntilIdle()
         assertEquals(1, adapter.submitPromptCallCount)
@@ -299,8 +353,9 @@ class ChatQueueViewModelTest {
         assertNotNull(chat.uiState.value.queue.pause)
     }
     @Test fun disconnectDuringStreamHoldsActiveOutcomeAndNeverResendsAfterReconnect() = runTest {
-        val adapter = FakeGatewayProtocolAdapter(); val chat = vm(adapter); advanceUntilIdle()
-        chat.updateDraft("synthetic first"); chat.submitPrompt(); advanceUntilIdle()
+        val adapter = FakeGatewayProtocolAdapter(); val store = MemoryChatQueueStore()
+        store.write(ChatQueueState(waiting = listOf(QueueItem(payload = QueuePayload.Prompt("synthetic first")))))
+        val chat = vm(adapter, store, sessions = idleEvidence()); advanceUntilIdle(); chat.resumeQueue(); advanceUntilIdle()
         chat.updateDraft("synthetic later"); chat.submitPrompt(); advanceUntilIdle()
         adapter.connectionStatus.value = com.hermes.bot.domain.ConnectionStatus.OFFLINE; advanceUntilIdle()
         assertEquals(QueueItemState.UNKNOWN, chat.uiState.value.queue.active?.state)
@@ -331,11 +386,12 @@ class ChatQueueViewModelTest {
 
     @Test fun backgroundPausesWaitingItemsAndRestoreDoesNotAutoSend() = runTest {
         val adapter = FakeGatewayProtocolAdapter(); val chat = vm(adapter); advanceUntilIdle()
+        chat.updateDraft("synthetic running"); chat.submitPrompt(); advanceUntilIdle()
         chat.pauseQueue(); advanceUntilIdle()
         chat.updateDraft("synthetic pending"); chat.submitPrompt(); advanceUntilIdle()
         chat.setQueueVisibility(false); advanceUntilIdle()
         assertEquals(QueuePause.BACKGROUND, chat.uiState.value.queue.pause)
         chat.setQueueVisibility(true); advanceUntilIdle()
-        assertEquals(0, adapter.submitPromptCallCount)
+        assertEquals(1, adapter.submitPromptCallCount)
     }
 }

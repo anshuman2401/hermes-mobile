@@ -56,7 +56,7 @@ class ChannelFirstPromptTest {
             vaultStorage = vault, pendingTurnLedger = PendingTurnLedger(vault), chatQueueStore = queueStore)
             .also { if (queueStore != null) it.setQueueVisibility(true) }
     }
-    @Test fun queuedChannelWaitsForDelayedRestoreAndWritesOnce() = runTest {
+    @Test fun idleChannelWaitsForDelayedQueueReadThenSendsDirectlyOnce() = runTest {
         val repo = Repo(); val adapter = Recording(); val saved = MemoryChatQueueStore()
         val read = CompletableDeferred<Unit>()
         val delayed = object : ChatQueueStore by saved {
@@ -72,7 +72,7 @@ class ChannelFirstPromptTest {
         assertFalse(chat.acceptChannelFirstPrompt("synthetic-repeat", "synthetic duplicate"))
         val owner = ViewModelStore().apply { put("chat", chat) }; owner.clear(); advanceUntilIdle()
         val reopened = vm(repo, adapter, queueStore = saved); advanceUntilIdle()
-        assertEquals(QueueItemState.UNKNOWN, reopened.uiState.value.queue.active?.state)
+        assertNull(reopened.uiState.value.queue.active)
         assertEquals(1, adapter.writes.size)
     }
 

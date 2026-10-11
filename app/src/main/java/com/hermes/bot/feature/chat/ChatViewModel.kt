@@ -291,8 +291,10 @@ class ChatViewModel(
     private var queueForeground = false
     private var queueTurnCompletion: CompletableDeferred<QueueExecutionResult>? = null
     private var queuedPromptTerminal: GatewayEvent? = null
+    private var promptAwaitingAdmission = false
     private var queueCommandResult = QueueExecutionResult.COMPLETE
     private var queueRequiresIdle = false
+    private var queueAwaitingTurnSettlement = false
     private var queuedExecutionId: String? = null
     private var queueRequestedYolo: Boolean? = null
 
@@ -911,7 +913,7 @@ class ChatViewModel(
     }
     private fun canDispatchQueue(): Boolean {
         val state = _uiState.value
-        return queueForeground && !historyDisposed && !queueRequiresIdle &&
+        return queueForeground && !historyDisposed && !queueRequiresIdle && !queueAwaitingTurnSettlement &&
             !state.isInitialLoading && !state.isRefreshing && !state.isSubmitting && !state.isStreaming &&
             !state.slashBusy && !state.isCompressionBusy && !state.pickerBusy && state.activePickerChange == null &&
             state.pendingUnknownTurnId == null && state.unknownEditId == null && state.edit == null && !state.voice.isBusy &&
@@ -3120,7 +3122,7 @@ class ChatViewModel(
                 // The writer acknowledgement can lag the terminal event. Keep one
                 // admitted-runtime terminal in memory until the pending ledger settles;
                 // ambiguity still holds the queue and never authorizes another write.
-                if (queueTurnCompletion != null && _uiState.value.isSubmitting && activeAssistantEntryId == null &&
+                if (promptAwaitingAdmission && _uiState.value.isSubmitting && activeAssistantEntryId == null &&
                     (event is GatewayEvent.MessageComplete || event is GatewayEvent.Error)) {
                     if (queuedPromptTerminal == null) queuedPromptTerminal = event
                     return@collect
@@ -3409,10 +3411,11 @@ class ChatViewModel(
             }
             return
         }
-        if (chatQueue != null && state.pendingImages.isEmpty() && state.pendingFiles.isEmpty()) {
+        if (state.shouldQueuePrompt && state.pendingImages.isEmpty() && state.pendingFiles.isEmpty()) {
             enqueueTextOrCommand(null)
             return
         }
+        if (chatQueue != null && !state.isComposerReady) return
         submitPlainPrompt()
     }
 
@@ -3450,6 +3453,8 @@ class ChatViewModel(
         }
         if (stateAtSend.submitBlockedReason != null || !stateAtSend.isAttachmentConnectionAvailable) return
 
+        queuedPromptTerminal = null
+        promptAwaitingAdmission = true
         if (clearDraft) clearPersistedDraftAtSendPoint()
         val draftGenerationAtSend = currentDraftGeneration()
         _uiState.update {
@@ -3486,14 +3491,16 @@ class ChatViewModel(
                             _uiState.value.isAttachmentConnectionAvailable &&
                             _uiState.value.queue.pause !in setOf(QueuePause.DISCONNECTED, QueuePause.BACKGROUND, QueuePause.STOPPED)
                     } }) }
-                catch (cancelled: CancellationException) { queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN); throw cancelled }
+                catch (cancelled: CancellationException) { promptAwaitingAdmission = false; queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN); throw cancelled }
                 catch (_: Exception) {
+                    promptAwaitingAdmission = false
                     if (queueTurnCompletion == null) throw IllegalStateException("Prompt preparation failed")
                     queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN)
                     _uiState.update { it.copy(isSubmitting = false, submissionStatus = SubmissionStatus.UNKNOWN,
                         errorMessage = "Prompt outcome unknown. Check history before continuing.") }
                     return@launch
                 }
+                promptAwaitingAdmission = false
                 when (outcome) {
                     is TurnSubmissionOutcome.Admitted -> {
                         activeTurnId = outcome.pendingTurnId
@@ -3587,11 +3594,20 @@ class ChatViewModel(
                                 errorMessage = "Prompt submission status unknown. Please check history or send as a new prompt."
                             )
                         }
+                        queuedPromptTerminal = null
+                        if (queueAttempt == null && _uiState.value.queue.waiting.isNotEmpty()) {
+                            queueRequiresIdle = true
+                            chatQueue?.pause(QueuePause.UNKNOWN)
+                        }
                         publishStreaming(false)
                     }
 
                     is TurnSubmissionOutcome.RejectedBusy, is TurnSubmissionOutcome.ValidationFailed -> {
                         queueTurnCompletion?.complete(QueueExecutionResult.FAILED)
+                        if (queueAttempt == null && _uiState.value.queue.waiting.isNotEmpty()) {
+                            queueRequiresIdle = true
+                            chatQueue?.pause(QueuePause.FAILED)
+                        }
                         // BLD-006 S3: a local rejection preserves the draft
                         // (in memory and in the vault) and leaves no stranded
                         // optimistic SENDING row.
@@ -3631,6 +3647,7 @@ class ChatViewModel(
                 return@launch
             }
 
+            promptAwaitingAdmission = false
             if (queueTurnCompletion != null) {
                 queueTurnCompletion?.complete(QueueExecutionResult.FAILED)
                 _uiState.update { it.copy(isSubmitting = false) }
@@ -4182,6 +4199,9 @@ class ChatViewModel(
                 null
             }
 
+        // Direct sends own their ledger settlement too; queued work must not
+        // use the transient non-streaming state before that IO completes.
+        queueAwaitingTurnSettlement = chatQueue != null && activeTurnId != null
         _uiState.update { current ->
             var updatedTimeline = current.timeline.map { entry ->
                 if (entry is AssistantMessage && entry.id == entryId &&
@@ -4253,8 +4273,15 @@ class ChatViewModel(
         completedTurnId?.let { turnId ->
             viewModelScope.launch {
                 pendingTurnLedger?.markResolved(turnId)
+                if (completingQueueTurn == null && completionResult != QueueExecutionResult.COMPLETE &&
+                    _uiState.value.queue.waiting.isNotEmpty()) {
+                    queueRequiresIdle = true
+                    chatQueue?.pause(if (completionResult == QueueExecutionResult.UNKNOWN) QueuePause.UNKNOWN else QueuePause.FAILED)
+                }
                 if (activeTurnId == turnId) activeTurnId = null
+                queueAwaitingTurnSettlement = false
                 completingQueueTurn?.complete(completionResult)
+                if (completingQueueTurn == null) chatQueue?.runNext(::canDispatchQueue, ::executeQueueItem)
             }
         } ?: completingQueueTurn?.complete(completionResult)
     }

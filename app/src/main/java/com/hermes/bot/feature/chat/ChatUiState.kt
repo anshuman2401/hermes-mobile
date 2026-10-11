@@ -254,6 +254,12 @@ data class ChatUiState(
     val isSlashCommand: Boolean get() =
         com.hermes.bot.data.commands.SlashCommandPolicy.parse(composerDraft) != null &&
             pendingImages.isEmpty() && pendingFiles.isEmpty()
+    /** Idle prompts use direct send; only busy chat or existing intent needs FIFO. */
+    val shouldQueuePrompt: Boolean get() = queueEnabled && (isStreaming || isSubmitting ||
+        slashBusy || isCompressionBusy || queue.waiting.isNotEmpty() || queue.active != null)
+    val queuesComposerInput: Boolean get() = shouldQueuePrompt ||
+        (queueEnabled && isSlashCommand && !isImmediateSlash)
+
     val canEnqueue: Boolean get() = queueEnabled && queue.loaded && !queue.isFull &&
         edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable &&
         composerDraft.isNotBlank() && !runtimeSessionId.isNullOrBlank() && !isInitialLoading &&
@@ -268,7 +274,7 @@ data class ChatUiState(
     private val queueAllowsAttachments: Boolean get() = !queueEnabled ||
         (queue.loaded && queue.pause != com.hermes.bot.data.queue.QueuePause.STORAGE && queue.waiting.isEmpty() && queue.active == null)
     val isComposerReady: Boolean
-        get() = if (queueEnabled && pendingImages.isEmpty() && pendingFiles.isEmpty()) canEnqueue ||
+        get() = if (queueEnabled && (queuesComposerInput || isImmediateSlash) && pendingImages.isEmpty() && pendingFiles.isEmpty()) canEnqueue ||
             (isImmediateSlash && edit == null && unknownEditId == null && !voice.isBusy &&
                 !runtimeSessionId.isNullOrBlank() && savedSnapshotCapturedAtMillis == null && !isInitialLoading) else edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable && queueAllowsAttachments &&
             (composerDraft.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()) &&

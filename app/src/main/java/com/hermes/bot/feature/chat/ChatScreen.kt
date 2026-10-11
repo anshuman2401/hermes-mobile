@@ -723,8 +723,7 @@ fun ChatScreen(
                         }
                     }
                     uiState?.let { state ->
-                        if (state.queueEnabled && !state.queue.loaded) Text("Loading queue…", modifier = Modifier.padding(horizontal = 16.dp))
-                        com.hermes.bot.feature.chat.components.ChatQueuePanel(state.queue, queueHeight,
+                        com.hermes.bot.feature.chat.components.ChatQueuePresentation(state.queue, state.isStreaming, queueHeight,
                             onPause = { viewModel?.pauseQueue() }, onResume = { viewModel?.resumeQueue() },
                             onCancel = { viewModel?.cancelQueuedItem(it) }, onEdit = { viewModel?.editQueuedItem(it) },
                             onEditText = { viewModel?.updateQueuedEdit(it) }, onFinishEdit = { viewModel?.finishQueuedEdit(it) },
@@ -734,7 +733,7 @@ fun ChatScreen(
                             enabled = state.composerDraft.isEmpty()) { Text("Use suggested text") }
                     }
                     ChatComposer(
-                        queueEnabled = uiState?.queueEnabled == true && uiState.pendingImages.isEmpty() && uiState.pendingFiles.isEmpty(),
+                        queueEnabled = uiState?.queuesComposerInput == true && uiState.pendingImages.isEmpty() && uiState.pendingFiles.isEmpty(),
                         draftText = uiState?.edit?.text ?: composerDraft,
                         edit = uiState?.edit,
                         canResendEdit = uiState?.canResendEdit() == true,
