@@ -136,7 +136,7 @@ class HostUpdateViewModel(
     }
 
     private suspend fun loadWithoutTracking(captured: InsightsScope, failure: HostUpdateFailure, request: Long) {
-        val canRead = failure in setOf(HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)
+        val canRead = failure in setOf(HostUpdateFailure.TIMEOUT, HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)
         mutable.value = mutable.value.copy(loading = canRead, failure = failure, check = null,
             checkedAt = null, canTrack = false, confirmationOpen = false)
         if (!canRead) return

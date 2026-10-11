@@ -114,7 +114,7 @@ class HostUpdateViewModelTest {
     }
 
     @Test fun unavailableTrackingStillShowsVersionButCannotStartAndRefreshRecovers() {
-        for (failure in listOf(HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)) {
+        for (failure in listOf(HostUpdateFailure.TIMEOUT, HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)) {
             val repo = Repository().apply { statusFailure = failure }
             val vm = HostUpdateViewModel(repo)
             vm.open()
