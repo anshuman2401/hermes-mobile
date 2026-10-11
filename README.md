@@ -24,6 +24,8 @@ java -version                       # confirm JDK 21
 
 Set the SDK environment variable in your shell before the verifier if Android Studio has not already exposed the SDK, for example `export ANDROID_HOME=/path/to/android-sdk`. No Hermes endpoint or app configuration is needed for this command: the JVM tests use synthetic fixtures. The verifier runs repository policy checks, JVM tests, Android lint, and debug APK assembly. It does not run the app, package instrumentation tests, or test a device or host. Reports and the debug APK are generated under `app/build/`. See the [verification runbook](specs/testing/verification.md) for report paths and the clean final-candidate command. If verification cannot run, report the missing prerequisite or failing stage rather than treating assembly or cached output as device evidence.
 
+When running Gradle or the verifier, use the [shared lock procedure](specs/testing/verification.md#shared-gradle-lock) so worktrees cannot build concurrently.
+
 For a documentation-only change, review the text and links and run `git diff --check`; the full verifier is unnecessary unless specifically requested. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.
 
 This repository has no GitHub Actions verification workflow. Run `./scripts/verify.sh` locally for executable changes and include the results in the PR as described in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -35,6 +37,14 @@ The release application ID is `com.anshuman2401.hermesmobile`. Debug builds use 
 [version.properties](version.properties) is the single source for the Android version and the Settings footer. The initial public version is `0.1.0`, indicating a pre-1.0 app. Use `MAJOR.MINOR.PATCH`: while below 1.0, increment MINOR for features or breaking changes and PATCH for compatible fixes. From 1.0 onward, increment MAJOR for breaking changes, MINOR for compatible features, and PATCH for compatible fixes. Reset lower components when incrementing a higher one. Version numbers have no leading zeros.
 
 For each distributed update, change `VERSION_NAME` as appropriate and increase `VERSION_CODE` above every previously distributed code for that application ID; never reset or derive the code from Git commit counts. The build rejects malformed names and codes outside Android's supported range. Debug builds append `-debug`, and Settings shows the installed build version. Keep the application ID and signing identity stable for future updates. Version edits do not publish a release; releases and tags require maintainer authorization.
+
+## Host compatibility
+
+This repository does not yet document a verified public host distribution/revision and reproducible host installation procedure. The upstream Hermes Agent link identifies the related project; it is not a guarantee that an arbitrary upstream release implements this client's APIs. Before using the app, obtain the compatible host source/version and setup instructions from your host maintainer.
+
+The [fixture manifest](app/src/test/resources/fixtures/v0.21.1/manifest.json) records historical synthetic contract evidence labelled `v0.21.1`, with its source branch and commit. That label is not a current supported-version matrix or a verified upstream installation recipe. The [connection contract](specs/architecture/current-system.md#connection-origin-and-auth-flow) describes status discovery, password-session authentication, one-use WebSocket tickets, and gateway readiness/capability checks. Additional features depend on the APIs described in the same architecture guide. Successful compilation or fixture tests do not establish deployed-host compatibility.
+
+You can build and run the local verifier without a host. Using connected features requires a compatible host you control; this repository supplies neither a host nor a public demo endpoint.
 
 ## First run and connecting
 
@@ -53,4 +63,4 @@ For engineering work, read the repository [rules](AGENTS.md), [documentation gui
 
 ## License
 
-Project code and documentation are available under the [MIT License](LICENSE). Bundled fonts and third-party libraries retain their own licenses, summarized in [third-party notices](THIRD_PARTY_NOTICES.md).
+Project-authored code and documentation are available under the [MIT License](LICENSE), except where otherwise noted. The [Code of Conduct](CODE_OF_CONDUCT.md) is an adaptation of Contributor Covenant 3.0 under CC BY-SA 4.0. Bundled fonts, third-party libraries, and build tooling retain their own licenses, summarized in [third-party notices](THIRD_PARTY_NOTICES.md).

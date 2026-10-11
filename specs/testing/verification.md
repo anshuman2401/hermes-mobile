@@ -29,6 +29,36 @@ Changes confined to documentation (including `.md`, documentation `.txt`, `.doc`
 
 This exemption applies to documentation content, not executable/build inputs based solely on their extension. Changes to code, tests, resources, dependencies, build configuration, executable scripts, or CI workflows require the full gate below. Mixed changes require the full gate. Existing unrelated workspace changes do not expand the verification scope of a documentation-only task.
 
+## Shared Gradle lock
+
+Serialize every Gradle invocation for this repository, including focused tests, verifier runs, and instrumentation packaging/execution. The verifier does not acquire a lock itself. All worktrees must use the same advisory lock; an unwrapped terminal command or Android Studio build can bypass it. Wait for existing builds to finish before adopting this procedure and avoid starting IDE builds while a locked command runs.
+
+In Bash with `flock` available (provided by util-linux on Linux), define this helper in each shell used for builds. It resolves the common Git directory so linked worktrees share one lock file without hard-coded machine paths:
+
+```bash
+with_gradle_lock() (
+    set -e
+    cd "$(git rev-parse --show-toplevel)"
+    command -v flock >/dev/null || {
+        echo "flock is required for the shared Gradle lock" >&2
+        exit 1
+    }
+    hermes_git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+    flock --exclusive "$hermes_git_common_dir/hermes-mobile-gradle.lock" "$@"
+)
+```
+
+Run from inside the relevant checkout. Prefix each Gradle/verifier command shown in this runbook with `with_gradle_lock`, for example:
+
+```bash
+with_gradle_lock ./gradlew testDebugUnitTest --tests 'com.hermes.bot.data.turn.*' --stacktrace
+with_gradle_lock ./scripts/verify.sh
+# After committing the candidate with a clean tree:
+with_gradle_lock ./scripts/verify.sh --final-candidate
+```
+
+The lock waits for the previous holder and releases when the command exits; it preserves the command's exit status. The lock file lives in Git metadata, not tracked source. Do not remove it while builds may be running, since that can create separate locks. If `flock` is unavailable, use an environment that provides it before running these commands. This helper is a shell-local wrapper; do not acquire the same lock again inside the wrapped command. Other local build automation must use the same lock file to participate.
+
 ## Default local gate
 
 ```bash
@@ -113,7 +143,7 @@ For assistant Markdown changes, this command includes formatting, interaction po
   --console=plain --stacktrace
 ```
 
-Use the established shared Gradle lock for these commands as required by AGENTS.md. Inspect the complete available JUnit failure list, not only the first console failure. Preserve the focused aggregate, failed test names and concise result in existing feature evidence before a full run replaces the reports under `app/build/test-results/testDebugUnitTest` and `app/build/reports/tests/testDebugUnitTest`.
+Use the [shared Gradle lock](#shared-gradle-lock) for these commands as required by AGENTS.md. Inspect the complete available JUnit failure list, not only the first console failure. Preserve the focused aggregate, failed test names and concise result in existing feature evidence before a full run replaces the reports under `app/build/test-results/testDebugUnitTest` and `app/build/reports/tests/testDebugUnitTest`.
 
 For executable changes, after focused checks pass, the required full gate remains:
 
