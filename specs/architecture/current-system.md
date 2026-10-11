@@ -8,6 +8,8 @@ Documentation correction (2026-10-03): the chat-owner provider description below
 
 Hermes Mobile is a single-module native Kotlin/Jetpack Compose client (`:app`, namespace `com.hermes.bot`). It targets Android 36, supports API 26+, and compiles with Java 21. The host owns agent execution, tools, credentials, durable sessions, and transcript truth. The phone owns presentation state, encrypted connection/auth/session-selection data, drafts, pending-turn evidence, and private redacted diagnostics.
 
+The installed application ID is `com.anshuman2401.hermesmobile`; debug and synthetic stream-profile builds retain `.debug` and `.streamprofile` suffixes. The internal Kotlin namespace remains `com.hermes.bot`. Android treats the new ID as a separate application from the previous `com.hermes.bot` identity: app-private data and Keystore keys are not migrated, and the previous installation is not removed. Provider authorities follow the installed application ID. This identity change does not alter host contracts, remote history, retry behavior, or vault encryption.
+
 The production graph is assembled in `bootstrap/AppContainer.kt`:
 
 ```text

@@ -1,6 +1,25 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val appVersion = Properties().apply {
+    providers.fileContents(rootProject.layout.projectDirectory.file("version.properties"))
+        .asText.get().reader().use { load(it) }
+}
+val appVersionName = requireNotNull(appVersion.getProperty("VERSION_NAME")) {
+    "version.properties must define VERSION_NAME"
+}
+require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(appVersionName)) {
+    "VERSION_NAME must use MAJOR.MINOR.PATCH without leading zeros"
+}
+val appVersionCode = requireNotNull(appVersion.getProperty("VERSION_CODE")?.toIntOrNull()) {
+    "version.properties must define an integer VERSION_CODE"
+}
+require(appVersionCode in 1..2_100_000_000) {
+    "VERSION_CODE must be between 1 and 2100000000"
 }
 
 android {
@@ -8,12 +27,12 @@ android {
     compileSdk { version = release(37) }
 
     defaultConfig {
-        applicationId = "com.hermes.bot"
+        applicationId = "com.anshuman2401.hermesmobile"
         testInstrumentationRunner = "com.hermes.bot.feature.chat.StreamProfileRunner"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     signingConfigs {
