@@ -69,8 +69,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.hermes.bot.design.HermesShapeTokens
-import com.hermes.bot.design.HermesTheme
+import com.hermes.bot.design.AtelierShapes
+import com.hermes.bot.design.AtelierEditorial
 import com.hermes.bot.design.RelayOrbitIcon
 
 /**
@@ -134,8 +134,8 @@ fun ConnectScreen(
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 text = "Your host.\nYour Hermes.",
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.displaySmall.copy(fontFamily = AtelierEditorial),
+                fontWeight = FontWeight.Normal,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.semantics { heading() }
             )
@@ -178,6 +178,7 @@ fun ConnectScreen(
             ConnectState.PREFLIGHT_LOADING -> {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    shape = AtelierShapes.panel,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -187,10 +188,7 @@ fun ConnectScreen(
                     ) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(36.dp).semantics { contentDescription = "Connecting in progress" },
-                            // CHG-008 repair round 1 (P1-A): foreground indicator,
-                            // not a fill. #5352ED is only 3.07:1 on this card —
-                            // it clears the 3:1 floor but with no margin.
-                            color = HermesTheme.extendedColors.primaryText
+                            color = MaterialTheme.colorScheme.primary
                         )
                         Text(
                             text = "Testing host reachability and compatibility...",
@@ -213,6 +211,7 @@ fun ConnectScreen(
             ConnectState.CONNECTED_COMPATIBLE -> {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    shape = AtelierShapes.panel,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -313,12 +312,7 @@ fun ConnectScreen(
                             )
                             OutlinedButton(
                                 onClick = { /* form fields remain editable */ },
-                                // P-8: M3 1.4.0's OutlinedButton defaults its label to
-                                // onSurfaceVariant; on this (unwired, M3-baseline)
-                                // errorContainer card that is 2.95:1 dark — the same
-                                // class of failure as PR #62's banner Dismiss.
-                                // onErrorContainer is the matching on* role:
-                                // 7.17:1 in BOTH themes.
+                                // Match the foreground to the error panel.
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onErrorContainer
                                 ),
@@ -336,6 +330,7 @@ fun ConnectScreen(
             ConnectState.PROTOCOL_INCOMPATIBLE -> {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    shape = AtelierShapes.panel,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -358,9 +353,6 @@ fun ConnectScreen(
                         ) {
                             OutlinedButton(
                                 onClick = onToggleDiagnostics,
-                                // P-8: same surfaceContainer default-label defect —
-                                // onSurfaceVariant 5.50:1 dark. onSurface:
-                                // 17.00:1 dark / 14.63:1 light.
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurface
                                 ),
@@ -373,14 +365,14 @@ fun ConnectScreen(
                             androidx.compose.foundation.layout.Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(color = HermesTheme.extendedColors.codeSurface, shape = RoundedCornerShape(6.dp))
+                                    .background(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(6.dp))
                                     .padding(12.dp)
                             ) {
                                 Text(
                                     text = uiState.diagnosticDetails,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 12.sp,
-                                    color = HermesTheme.extendedColors.codeOnSurface
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -440,7 +432,7 @@ private fun ConnectFormSection(
         // Required disclosure is persistent and precedes the network action.
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(18.dp),
+            shape = AtelierShapes.panel,
             modifier = Modifier.fillMaxWidth().semantics {
                 contentDescription = "HTTP security notice: HTTP is not encrypted by itself. Use it only over a trusted private network or an encrypted tunnel such as Tailscale."
             }
@@ -475,7 +467,7 @@ private fun ConnectFormSection(
         Button(
             onClick = onTestConnection,
             enabled = !isLoading,
-            shape = RoundedCornerShape(17.dp),
+            shape = AtelierShapes.action,
             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp)
         ) {
             Text("Connect", style = MaterialTheme.typography.titleMedium)
@@ -557,7 +549,7 @@ private fun ConnectTextField(
             enabled = enabled,
             isError = error != null,
             keyboardOptions = keyboardOptions,
-            shape = RoundedCornerShape(16.dp),
+            shape = AtelierShapes.field,
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = colors.surfaceContainer,
                 unfocusedContainerColor = colors.surfaceContainer,
@@ -569,10 +561,10 @@ private fun ConnectTextField(
                 unfocusedPlaceholderColor = colors.onSurfaceVariant,
                 errorPlaceholderColor = colors.onSurfaceVariant,
                 // Foreground roles, rather than decorative low-contrast outlines.
-                focusedIndicatorColor = HermesTheme.extendedColors.primaryText,
+                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
                 unfocusedIndicatorColor = colors.onSurfaceVariant,
                 errorIndicatorColor = colors.error,
-                cursorColor = HermesTheme.extendedColors.primaryText,
+                cursorColor = MaterialTheme.colorScheme.primary,
                 errorCursorColor = colors.error
             ),
             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp).semantics {
@@ -607,6 +599,7 @@ private fun LoginFormCard(
 
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        shape = AtelierShapes.panel,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -620,7 +613,7 @@ private fun LoginFormCard(
                 Icon(
                     imageVector = Icons.Default.Lock,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(24.dp)
                 )
                 Text(
@@ -649,6 +642,7 @@ private fun LoginFormCard(
                 value = uiState.usernameDraft,
                 onValueChange = onUsernameChanged,
                 label = { Text("Username") },
+                shape = AtelierShapes.field,
                 singleLine = true,
                 enabled = !uiState.loginLoading,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, autoCorrect = false),
@@ -665,6 +659,7 @@ private fun LoginFormCard(
                 value = uiState.passwordDraft,
                 onValueChange = onPasswordChanged,
                 label = { Text("Password") },
+                shape = AtelierShapes.field,
                 singleLine = true,
                 enabled = !uiState.loginLoading,
                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -707,6 +702,7 @@ private fun LoginFormCard(
             // Sign in button
             Button(
                 onClick = onLogin,
+                shape = AtelierShapes.action,
                 enabled = !uiState.loginLoading,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -753,14 +749,9 @@ fun StateSignalBanner(
     }
 
     val iconTint = when (state) {
-        // CHG-008 repair round 1 (P1-A): this tint paints BOTH the state icon
-        // (inside a 15%-alpha circle of its own colour, where #5352ED measures
-        // 2.71:1 — below the 3:1 graphical-object floor) AND the labelSmall
-        // badge text next to it (3.07:1 on the card — below the 4.5:1 text
-        // floor). Both are foreground roles, so both read primaryText.
-        ConnectState.FIRST_LAUNCH -> HermesTheme.extendedColors.primaryText
-        ConnectState.PREFLIGHT_LOADING -> HermesTheme.extendedColors.primaryText
-        ConnectState.AUTH_REQUIRED -> MaterialTheme.colorScheme.tertiary
+        ConnectState.FIRST_LAUNCH -> MaterialTheme.colorScheme.primary
+        ConnectState.PREFLIGHT_LOADING -> MaterialTheme.colorScheme.primary
+        ConnectState.AUTH_REQUIRED -> MaterialTheme.colorScheme.primary
         ConnectState.CONNECTED_COMPATIBLE -> MaterialTheme.colorScheme.secondary
         ConnectState.HOST_UNREACHABLE,
         ConnectState.ORIGIN_POLICY_REJECTED,
@@ -768,10 +759,10 @@ fun StateSignalBanner(
     }
 
     Surface(
-        shape = RoundedCornerShape(HermesShapeTokens.cardCornerSmall),
+        shape = AtelierShapes.panel,
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = modifier
-            .border(width = 1.dp, color = HermesTheme.extendedColors.glassOutline, shape = RoundedCornerShape(HermesShapeTokens.cardCornerSmall))
+            .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant, shape = AtelierShapes.panel)
             .semantics {
                 liveRegion = LiveRegionMode.Polite
                 contentDescription = "Current state: ${state.label}. ${state.description}"
@@ -783,7 +774,7 @@ fun StateSignalBanner(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             androidx.compose.foundation.layout.Box(
-                modifier = Modifier.size(36.dp).clip(CircleShape).background(iconTint.copy(alpha = 0.15f)),
+                modifier = Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(imageVector = signal.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
