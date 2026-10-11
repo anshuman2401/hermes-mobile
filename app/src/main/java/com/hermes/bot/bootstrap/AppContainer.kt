@@ -69,6 +69,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.asAndroidBitmap
 import java.io.File
 
 /**
@@ -159,7 +160,7 @@ class DefaultAppContainer(
      * composition-root seam shared by Settings' two reset rows).
      */
     private val localDataResetCoordinator: LocalDataResetCoordinator by lazy {
-        DefaultLocalDataResetCoordinator(vault = vaultStorage)
+        DefaultLocalDataResetCoordinator(vault = vaultStorage, clearMemory = { botMemory.clear() })
     }
 
     override val authRepository: AuthRepository by lazy {
@@ -213,7 +214,21 @@ class DefaultAppContainer(
         )
     }
 
-    override val botRepository: BotRepository by lazy { createBotsRepository(gatewayAdapter, vaultStorage) }
+    private val botMemory = com.hermes.bot.data.bots.BotMemoryCache()
+    private val botLifetime = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+    override val botRepository: BotRepository by lazy {
+        DefaultBotRepository(gatewayAdapter, vaultStorage, memory = botMemory).also { repository ->
+            botLifetime.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                repository.connectionStatus.collect { status ->
+                    if (status != com.hermes.bot.domain.ConnectionStatus.CONNECTED) repository.clearCache()
+                }
+            }
+        }
+    }
+    private val botThumbnails by lazy {
+        com.hermes.bot.feature.bots.BotThumbnailCache<androidx.compose.ui.graphics.ImageBitmap>(
+            botMemory, botRepository::isCurrent, { it.asAndroidBitmap().allocationByteCount })
+    }
     override fun createBotScreenViewModel(): BotScreenViewModel =
         BotScreenViewModel(BotScreenRepository(botRepository, gatewayAdapter))
     override val botThreadPreviewRepository: com.hermes.bot.data.context.BotThreadPreviewRepository by lazy {
@@ -334,7 +349,7 @@ class DefaultAppContainer(
             // BUG-012: arm automatic reconnect on connect success; disarm on explicit disconnect.
             // Lazy reconnectManager access here is safe: it is only touched after a connect.
             onGatewayConnected = { origin -> reconnectManager.configureOrigin(origin) },
-            onGatewayDisconnected = { reconnectManager.clearOrigin() },
+            onGatewayDisconnected = { botMemory.disconnect(gatewayAdapter.connectionGeneration); reconnectManager.clearOrigin() },
             recovery = connectionRecovery
         )
 
@@ -385,8 +400,8 @@ class DefaultAppContainer(
     override fun createDebugLogsViewModel(): DebugLogsViewModel =
         DebugLogsViewModel(repository = privateDiagnostics, diagnosticRing = diagnosticRing)
 
-    override fun createBotsViewModel(): BotsViewModel = createBotsViewModel(botRepository,
-        DefaultScreenOverviewRepository(botRepository, gatewayAdapter))
+    override fun createBotsViewModel(): BotsViewModel = BotsViewModel(botRepository,
+        DefaultScreenOverviewRepository(botRepository, gatewayAdapter), botThumbnails)
 
     override fun createBrainMainSettingsViewModel(): BrainMainSettingsViewModel =
         BrainMainSettingsViewModel(

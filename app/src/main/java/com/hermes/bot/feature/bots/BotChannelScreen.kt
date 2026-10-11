@@ -91,6 +91,7 @@ fun BotChannelScreen(state: BotChannelUiState, sessions: SessionsUiState, onBack
     embedded: Boolean = false, onScrollPosition: (String, Int, Int, String?, String?) -> Unit = { _, _, _, _, _ -> }) {
     AtelierTheme(currentTheme) {
         val ready = isChannelListReady(state.channel, sessions)
+        val visible = isChannelListVisible(state.channel, sessions)
         val conversations = androidx.compose.runtime.remember(sessions.sessions) { botBoardConversations(sessions.sessions) }
         val listState = androidx.compose.runtime.remember(state.channel, state.connectionId, state.normalizedOrigin) {
             androidx.compose.foundation.lazy.LazyListState(state.scrollIndex, state.scrollOffset)
@@ -137,15 +138,15 @@ fun BotChannelScreen(state: BotChannelUiState, sessions: SessionsUiState, onBack
                     Text("Couldn't load conversations. Please retry.", Modifier.padding(16.dp))
                     TextButton(onClick = onRefresh, enabled = !locked) { Text("Retry") }
                 }
-                if (ready) {
-                    if (conversations.isEmpty()) Text("No conversations yet. Send a message to start one.", Modifier.padding(16.dp))
+                if (visible) {
+                    if (conversations.isEmpty() && !sessions.isLoading) Text("No conversations yet. Send a message to start one.", Modifier.padding(16.dp))
                     // The authoritative list is newest-first; index zero starts beside the composer.
                     LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(28.dp, Alignment.Bottom)) {
                         items(conversations, key = { it.id }) { thread ->
                             BotThreadPost(thread.threadPresentation(), state.displayName ?: state.channel.orEmpty(), state.avatar,
-                                state.threadReplies[thread.id]?.text, locked) { onOpen(thread.id) }
+                                state.threadReplies[thread.id]?.text, locked || !ready) { onOpen(thread.id) }
                         }
                     }
                 }

@@ -178,6 +178,10 @@ class BotChannelViewModel(
     }
 }
 
+/** Matching retained rows may render during refresh; actions still require [isChannelListReady]. */
+fun isChannelListVisible(channel: String?, sessions: SessionsUiState): Boolean =
+    channel != null && channel == sessions.selectedProfileName && sessions.staleProfileNotice == null
+
 /** Never expose the unscoped fallback list under a selected bot's title. */
 fun isChannelListReady(channel: String?, sessions: SessionsUiState): Boolean =
     channel != null && channel == sessions.selectedProfileName && !sessions.isLoading &&
