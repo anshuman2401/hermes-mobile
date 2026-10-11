@@ -18,6 +18,127 @@ class ChatCachedHistoryPreviewTest {
     @get:Rule val main = MainDispatcherRule()
     @get:Rule val temp = TemporaryFolder()
 
+    @Test fun diskPreviewAppearsWhileHostScopePreparationIsHeld() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize(); seed(f)
+            val preparationEntered = CompletableDeferred<Unit>()
+            val releasePreparation = CompletableDeferred<Unit>()
+            val heldStorage = object : com.hermes.bot.data.local.VaultStorage by f.vault {
+                override suspend fun getActiveProfileId(): String? {
+                    preparationEntered.complete(Unit)
+                    releasePreparation.await()
+                    return f.vault.getActiveProfileId()
+                }
+            }
+            val vm = f.vm(storage = heldStorage)
+            try {
+                await { preparationEntered.await(); vm.uiState.first { it.isCachedHistoryPreview } }
+                assertFalse(vm.uiState.value.showInitialLoading)
+                assertEquals("Synthetic cached answer", vm.uiState.value.timeline.filterIsInstance<AssistantMessage>().single().text)
+                assertEquals(0, f.gets)
+                assertTrue(f.resumeParams.isEmpty())
+                releasePreparation.complete(Unit)
+                f.awaitLoaded(vm)
+                assertFalse(vm.uiState.value.isCachedHistoryPreview)
+            } finally { f.clearVMs() }
+        }
+    }
+
+    @Test fun fiveWarmReopensInitializeBeforePreparationAndSurviveCookieRenewal() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize(); f.vault.prepareLocalLogin(f.origin.originUrl)
+            ChatPreviewRepository(f.vault).use { memory ->
+                f.awaitLoaded(f.vm(previewRepository = memory))
+                f.clearVMs()
+                repeat(5) { attempt ->
+                    val lease = requireNotNull(f.vault.readAuthCredentialLease(f.origin.originUrl))
+                    f.vault.mutateAuthCredentialIfCurrent(lease, f.credential("synthetic-successor-$attempt"), false)
+                    val entered = CompletableDeferred<Unit>()
+                    val release = CompletableDeferred<Unit>()
+                    val storage = object : com.hermes.bot.data.local.VaultStorage by f.vault {
+                        override suspend fun getActiveProfileId(): String? {
+                            entered.complete(Unit); release.await(); return f.vault.getActiveProfileId()
+                        }
+                    }
+                    val reopened = f.vm(storage = storage, previewRepository = memory)
+                    // Constructor result, not an eventual StateFlow wait: warm messages already exist.
+                    assertTrue(reopened.uiState.value.timeline.filterIsInstance<AssistantMessage>()
+                        .any { it.text == "Synthetic stored answer" })
+                    assertTrue(reopened.uiState.value.isCachedHistoryPreview)
+                    assertNull(reopened.uiState.value.runtimeSessionId)
+                    assertFalse(reopened.uiState.value.isComposerReady)
+                    await { entered.await() }
+                    release.complete(Unit)
+                    f.awaitLoaded(reopened)
+                    assertFalse(reopened.uiState.value.isCachedHistoryPreview)
+                    f.clearVMs()
+                }
+            }
+        }
+    }
+
+    @Test fun acceptedRestHistoryWarmsMemoryEvenWhenResumeAndDiskWriteFail() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize()
+            ChatPreviewRepository(f.vault).use { memory ->
+                f.transport.setRpcHandler("session.resume") { id, _ -> f.transport.respondError(id, 5000, "Synthetic unavailable") }
+                val failingCache = object : ConversationCacheRepository by f.cache {
+                    override suspend fun replaceRemoteSnapshotScoped(storedSessionId: String, resume: SessionResumeResult,
+                        nowMillis: Long, expected: com.hermes.bot.data.local.AuthCredentialLease, selectedContext: String?): ConversationCacheWriteResult =
+                        ConversationCacheWriteResult.Failed
+                }
+                val first = f.vm(cacheRepository = failingCache, previewRepository = memory)
+                f.awaitLoaded(first)
+                assertTrue(first.uiState.value.hasAcceptedStoredHistory)
+                f.clearVMs()
+                val resume = holdHost(f)
+                val reopened = f.vm(cacheRepository = failingCache, previewRepository = memory)
+                try {
+                    assertTrue(reopened.uiState.value.timeline.filterIsInstance<AssistantMessage>()
+                        .any { it.text == "Synthetic stored answer" })
+                    await { resume.await(); f.bodyEntered!!.await() }
+                    assertTrue(reopened.uiState.value.isCachedHistoryPreview)
+                } finally { f.clearVMs() }
+            }
+        }
+    }
+
+    @Test fun failedSyncKeepsWarmRestPreviewAndWorkspaceMutationClearsIt() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize()
+            ChatPreviewRepository(f.vault).use { memory ->
+                f.awaitLoaded(f.vm(previewRepository = memory)); f.clearVMs()
+                f.body = "Synthetic malformed history"
+                f.transport.setRpcHandler("session.resume") { id, _ -> f.transport.respondError(id, 5000, "Synthetic unavailable") }
+                val reopened = f.vm(previewRepository = memory)
+                f.awaitLoaded(reopened)
+                assertTrue(reopened.uiState.value.timeline.filterIsInstance<AssistantMessage>().any { it.text == "Synthetic stored answer" })
+                assertNotNull(reopened.uiState.value.savedSnapshotCapturedAtMillis)
+                assertFalse(reopened.uiState.value.isInitialLoading)
+                assertFalse(reopened.uiState.value.isComposerReady)
+                assertNull(reopened.uiState.value.submitBlockedReason)
+                f.vault.saveSelectedContextProfile("synthetic-other")
+                await { reopened.uiState.first { it.timeline.isEmpty() } }
+                assertNull(reopened.uiState.value.savedSnapshotCapturedAtMillis)
+            }
+        }
+    }
+
+    @Test fun defaultWorkspaceAlsoReopensSynchronouslyFromMemory() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize(); f.vault.clearSelectedContextProfile()
+            ChatPreviewRepository(f.vault).use { memory ->
+                f.awaitLoaded(f.vm(previewRepository = memory)); f.clearVMs()
+                f.transport.setRpcHandler("session.resume") { _, _ -> }
+                val reopened = f.vm(previewRepository = memory)
+                assertEquals("Synthetic compact answer", reopened.uiState.value.timeline.filterIsInstance<AssistantMessage>().single().text)
+                assertTrue(reopened.uiState.value.isCachedHistoryPreview)
+                assertFalse(reopened.uiState.value.isComposerReady)
+                f.clearVMs()
+            }
+        }
+    }
+
     private suspend fun seed(f: StoredChatFixture) {
         assertEquals(ConversationCacheWriteResult.Written, f.cache.replaceRemoteSnapshot("synthetic-session",
             SessionResumeResult("synthetic-old-runtime", "synthetic-session", 2, listOf(

@@ -167,7 +167,8 @@ class ChatViewModel(
     private val chatQueueFactory: ((() -> String?) -> ChatQueueStore)? = null,
     private val voiceClock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val approvalRepository: com.hermes.bot.data.approval.ApprovalRepository? = null,
-    private val fileRepository: com.hermes.bot.data.files.ConversationFileRepository? = null
+    private val fileRepository: com.hermes.bot.data.files.ConversationFileRepository? = null,
+    private val chatPreviewRepository: ChatPreviewRepository? = null
 ) : ViewModel() {
 
     val files by lazy { fileRepository?.let {
@@ -179,6 +180,9 @@ class ChatViewModel(
             state.isAttachmentConnectionAvailable && state.savedSnapshotCapturedAtMillis == null, state.timeline)
     }
 
+    private var capturedPreviewOwner: com.hermes.bot.data.local.ConversationCacheReadOwner? = null
+    private var memoryPreviewOwner: com.hermes.bot.data.local.ConversationCacheReadOwner? = null
+    private var stopPreviewObservation: (() -> Unit)? = null
     private var historyGeneration = 0L
     private var storedHistoryScope: StoredHistoryScope? = null
     private var historyLoadJob: kotlinx.coroutines.Job? = null
@@ -790,6 +794,20 @@ class ChatViewModel(
     }
 
     init {
+        stopPreviewObservation = chatPreviewRepository?.observeInvalidation {
+            viewModelScope.launch {
+                val owner = memoryPreviewOwner ?: return@launch
+                if (chatPreviewRepository.withOwner(owner) {} || historyDisposed) return@launch
+                memoryPreviewOwner = null
+                _uiState.update { state ->
+                    if (state.savedSnapshotCapturedAtMillis != null && state.runtimeSessionId == null)
+                        state.copy(timeline = emptyList(), cachedToolTrace = emptyList(),
+                            savedSnapshotCapturedAtMillis = null, isCachedHistoryPreview = false)
+                    else state
+                }
+            }
+        }
+        chatPreviewRepository?.publishIfPresent(sessionId) { snapshot -> publishMemoryPreview(snapshot) }
         _uiState.update { it.copy(dictationAvailable = voiceCoordinator != null, queueEnabled = chatQueue != null) }
         chatQueue?.let { queue ->
             viewModelScope.launch { queue.state.collect { state -> _uiState.update { it.copy(queue = state) } } }
@@ -1979,8 +1997,8 @@ class ChatViewModel(
                 isAttachingImage = false,
                 isAttachingFile = false,
                 attachmentErrorMessage = null,
-                savedSnapshotCapturedAtMillis = if (reconnectReplace) current.savedSnapshotCapturedAtMillis else null,
-                isCachedHistoryPreview = reconnectReplace && current.savedSnapshotCapturedAtMillis != null &&
+                savedSnapshotCapturedAtMillis = if (reconnectReplace || current.isCachedHistoryPreview || memoryPreviewOwner != null) current.savedSnapshotCapturedAtMillis else null,
+                isCachedHistoryPreview = (reconnectReplace || current.isCachedHistoryPreview || memoryPreviewOwner != null) && current.savedSnapshotCapturedAtMillis != null &&
                     gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED,
                 cachedToolTrace = emptyList(),
                 taskProgress = if (manual || recovery) current.taskProgress.copy(live = false) else TaskProgressState(),
@@ -2005,46 +2023,43 @@ class ChatViewModel(
             // submitBlockedReason is never NO_RUNTIME on this path (RISK-03/
             // OQ-03: the PR-7 reconnect lane stays untouched).
             val currentStatus = gatewayProtocolAdapter?.connectionStatus?.value
+            if (currentStatus != null && currentStatus != ConnectionStatus.CONNECTED &&
+                memoryPreviewOwner != null && _uiState.value.savedSnapshotCapturedAtMillis != null) {
+                _uiState.update { it.copy(isInitialLoading = false, isCachedHistoryPreview = false) }
+                return@launch
+            }
             if (currentStatus != null &&
                 currentStatus != ConnectionStatus.CONNECTED &&
                 serveConversationSnapshotIfPresent(sessionId)
             ) {
                 return@launch
             }
-            // Capture known selection before legacy nullable readers can recover a damaged record.
-            val previewOwner = try {
-                if (!manual && !recovery && _uiState.value.timeline.isEmpty() && currentStatus == ConnectionStatus.CONNECTED)
-                    conversationCacheRepository?.captureReadOwner() else null
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { null }
-            val scope = try { captureHistoryScope(repo, generation) }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) {
-                // Storage/key-provider failure closes the operation; never fall back to an unscoped resume.
-                if (!historyDisposed && generation == historyGeneration) _uiState.update {
-                    it.copy(isInitialLoading = false, errorMessage = "Unable to restore chat from storage.",
-                        submitBlockedReason = SubmitBlockedReason.NO_RUNTIME)
-                }
-                return@launch
-            }
-            if (historyDisposed || generation != historyGeneration) return@launch
-            // This child belongs to the host read, including the legacy default-selection lane.
-            val preview = launch preview@ {
+            // Cache owns a sibling lane: it never awaits host scope/auth preparation.
+            val preview = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) preview@ {
                 try {
                     if (manual || recovery || _uiState.value.timeline.isNotEmpty() ||
                         gatewayProtocolAdapter?.connectionStatus?.value != ConnectionStatus.CONNECTED) return@preview
                     fun previewCurrent() = !historyDisposed && generation == historyGeneration &&
                         _uiState.value.isInitialLoading && admittedSocket == gatewayProtocolAdapter?.connectionGeneration &&
                         gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED
-                    // Local cache ownership survives this read's cookie renewal; it never
-                    // borrows the REST budget or waits for a network header decision.
-                    val owner = previewOwner ?: return@preview
-                    serveConversationSnapshotIfPresent(sessionId, preview = true, readOwner = owner) {
-                        previewCurrent()
-                    }
+                    val owner = conversationCacheRepository?.captureReadOwner() ?: return@preview
+                    capturedPreviewOwner = owner
+                    serveConversationSnapshotIfPresent(sessionId, preview = true, readOwner = owner) { previewCurrent() }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { /* Cache failures never cancel the host read. */ }
             }
+            val scope = try { captureHistoryScope(repo, generation) }
+            catch (cancelled: CancellationException) { preview.cancel(); throw cancelled }
+            catch (_: Exception) {
+                // Let independent cache work settle before closing failed network preparation.
+                preview.join()
+                if (!historyDisposed && generation == historyGeneration) _uiState.update {
+                    it.copy(isInitialLoading = false, errorMessage = "Unable to restore chat from storage.",
+                        submitBlockedReason = SubmitBlockedReason.NO_RUNTIME)
+                }
+                return@launch
+            }
+            if (historyDisposed || generation != historyGeneration) { preview.cancel(); return@launch }
             if (scope != null) {
                 try {
                     openActiveHistory(repo, scope, generation, previousScope, previousSocketGeneration, recovery || manual, manual, admittedSocket)
@@ -2153,6 +2168,7 @@ class ChatViewModel(
                         sessionReasoningEffort = if (modelEventRuntime == data.runtimeSessionId || current.holdsPickerEchoFor(data.runtimeSessionId)) current.sessionReasoningEffort else SessionModelLabelPolicy.reasoningEffortFromInfo(data.info)
                     ).acceptYolo(data.info["yolo"] as? Boolean)
                 }
+                retainHostPreview(data.durableSessionId, historyEntries.flatten(), data.messagesOmitted) { current() }
                 if (pickerReadObservation == pickerObservationRevision) reconcilePicker(data.info, pickerReadRevision, fromRefresh = true)
                 // CHAT-017 (REQ-004): the resume echo seeds the last-reported
                 // pair, so a re-attach followed by a SessionInfo event that
@@ -2209,6 +2225,7 @@ class ChatViewModel(
                 // PR-3 (§6 row 3, REQ-09): CONNECTED-but-failed resume falls
                 // back to the labelled snapshot when one is fresh — the failed
                 // resume did NOT rewrite the cache (not authoritative, T-10(c)).
+                if (preserveMemoryPreviewAfterFailure("Unable to restore chat.")) return@onFailure
                 if (serveConversationSnapshotIfPresent(sessionId)) return@onFailure
                 _uiState.update { current ->
                     current.copy(
@@ -2227,7 +2244,8 @@ class ChatViewModel(
         historyLoadJob = read
         read.invokeOnCompletion { failure ->
             if (!historyDisposed && generation == historyGeneration) {
-                _uiState.update { it.copy(isCachedHistoryPreview = false, isHistoryReadInFlight = false) }
+                _uiState.update { it.copy(isCachedHistoryPreview = false, isHistoryReadInFlight = false,
+                    isInitialLoading = if (it.savedSnapshotCapturedAtMillis != null && it.runtimeSessionId == null) false else it.isInitialLoading) }
             }
             if (firstChannelRead && failure != null) channelInitialRead.complete(false)
         }
@@ -2630,6 +2648,8 @@ class ChatViewModel(
                     rows = proposedRows
                     try {
                         if (publish(candidate, resumed, false, storedPublication = true)) {
+                            retainHostPreview(scope.requestedSessionId, candidate.filterNot { it.live }.flatMap { it.parts },
+                                page.possiblyEarlier) { current() }
                             val keepLane = accepted.rows.isEmpty() && previousRows.isNotEmpty() && previousWindow != null
                             storedWindow = StoredWindow(scope, budget,
                                 if (keepLane) previousWindow!!.offset else page.nextOffset,
@@ -2670,7 +2690,11 @@ class ChatViewModel(
                 val previousResume = resumed
                 resumed = data
                 if (data.isUnpersistedDraft && storedGroups == null) storedNotice = null
-                try { publish(storedGroups ?: compactGroups(data), data, true) }
+                try {
+                    val hostGroups = storedGroups ?: compactGroups(data)
+                    if (publish(hostGroups, data, true)) retainHostPreview(data.durableSessionId,
+                        hostGroups.filterNot { it.live }.flatMap { it.parts }, data.messagesOmitted || storedWindow?.possiblyEarlier == true) { current(true) }
+                }
                 catch (_: StoredHistoryException) {
                     resumed = previousResume
                     if (current(true)) _uiState.update { it.copy(isInitialLoading = false,
@@ -2701,6 +2725,7 @@ class ChatViewModel(
             refreshErrorMessage = if (storedNotice != null || resumed == null || result.isFailure)
                 "Unable to refresh chat. Try again." else null) }
         if (current() && resumed == null && storedGroups == null && !preserveOpen) {
+            if (preserveMemoryPreviewAfterFailure("Unable to restore chat.")) return
             if (serveConversationSnapshotIfPresent(sessionId, budget.receipt, scope.selectedContext) { current() }) return
             if (current()) _uiState.update { it.copy(isInitialLoading = false,
                 errorMessage = "Unable to restore chat.", submitBlockedReason = SubmitBlockedReason.NO_RUNTIME) }
@@ -2874,8 +2899,14 @@ class ChatViewModel(
         current: suspend () -> Boolean = { true }): Boolean {
         val cacheRepo = conversationCacheRepository ?: return false
         if (!current()) return false
+        val localOwner = readOwner ?: if (expected == null && chatPreviewRepository != null) {
+            try { cacheRepo.captureReadOwner() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        } else null
+        if (expected == null && chatPreviewRepository != null && localOwner == null) return false
         val snapshotCache = try {
-            when (val read = if (readOwner != null) cacheRepo.loadForReadOwner(durableId, readOwner)
+            when (val read = if (localOwner != null) cacheRepo.loadForReadOwner(durableId, localOwner)
                 else if (expected == null) cacheRepo.load(durableId)
                 else cacheRepo.loadScoped(durableId, expected, selectedContext)) {
                 is ConversationCacheReadResult.Snapshot -> read.value
@@ -2913,44 +2944,89 @@ class ChatViewModel(
         } catch (_: Exception) {
             null
         }?.takeUnless { it.isBlank() || it == UNTITLED_CONVERSATION_HEADER_LABEL }
-        if (!current() || (readOwner != null && !cacheRepo.isReadOwnerCurrent(readOwner)) || !current()) return false
+        if (!current() || (localOwner != null && !cacheRepo.isReadOwnerCurrent(localOwner)) || !current()) return false
         skippedHistoryCount = skippedBlanks
         oldestRenderedHistoryRow = messages.firstOrNull()
-        _uiState.update { current ->
-            val existingRealTitle = current.sessionTitle?.takeUnless {
-                it.isBlank() || it == UNTITLED_CONVERSATION_HEADER_LABEL
-            }
-            current.copy(
-                durableSessionId = snapshotCache.durableSessionId,
-                // PR-3 hard invariant: a cached runtime ID is NEVER restored.
-                runtimeSessionId = null,
-                sessionTitle = existingRealTitle ?: activeHandleTitle ?: chatHeaderFallbackTitle(sessionId),
-                timeline = snapshotEntries,
-                taskProgress = TaskProgressState(),
-                // PR-3 (§6): strip flag carries the capture time while the
-                // surface renders this offline copy.
-                savedSnapshotCapturedAtMillis = snapshotCache.capturedAtMillis,
-                isCachedHistoryPreview = preview,
-                hasAcceptedStoredHistory = false,
-                // PR-4 (§6): fallback/cache-first projection — the
-                // phone-captured group renders with the served rows from
-                // the SAME load (one read, one atomic update).
-                cachedToolTrace = ExecutionTracePolicy.buildCachedToolTraceEntryList(
-                    snapshotCache.localTrace
-                ),
-                isInitialLoading = preview,
-                errorMessage = null,
-                // Never NO_RUNTIME on the snapshot path (PR-7 lane untouched).
-                submitBlockedReason = null,
-                trace = null,
-                historyBeginState = if (snapshotCache.messagesOmitted) {
-                    ChatUiState.HistoryBeginState.NON_EXHAUSTIVE
-                } else {
-                    ChatUiState.HistoryBeginState.REACHED
+        val publishSnapshot = {
+            _uiState.update { current ->
+                val existingRealTitle = current.sessionTitle?.takeUnless {
+                    it.isBlank() || it == UNTITLED_CONVERSATION_HEADER_LABEL
                 }
-            )
+                current.copy(
+                    durableSessionId = snapshotCache.durableSessionId,
+                    // PR-3 hard invariant: a cached runtime ID is NEVER restored.
+                    runtimeSessionId = null,
+                    sessionTitle = existingRealTitle ?: activeHandleTitle ?: chatHeaderFallbackTitle(sessionId),
+                    timeline = snapshotEntries,
+                    taskProgress = TaskProgressState(),
+                    // PR-3 (§6): strip flag carries the capture time while the
+                    // surface renders this offline copy.
+                    savedSnapshotCapturedAtMillis = snapshotCache.capturedAtMillis,
+                    isCachedHistoryPreview = preview,
+                    hasAcceptedStoredHistory = false,
+                    // PR-4 (§6): fallback/cache-first projection — the
+                    // phone-captured group renders with the served rows from
+                    // the SAME load (one read, one atomic update).
+                    cachedToolTrace = ExecutionTracePolicy.buildCachedToolTraceEntryList(
+                        snapshotCache.localTrace
+                    ),
+                    isInitialLoading = preview,
+                    errorMessage = null,
+                    // Never NO_RUNTIME on the snapshot path (PR-7 lane untouched).
+                    submitBlockedReason = null,
+                    trace = null,
+                    historyBeginState = if (snapshotCache.messagesOmitted) {
+                        ChatUiState.HistoryBeginState.NON_EXHAUSTIVE
+                    } else {
+                        ChatUiState.HistoryBeginState.REACHED
+                    }
+                )
+            }
         }
+        if (localOwner != null && chatPreviewRepository != null) {
+            if (!chatPreviewRepository.withOwner(localOwner) { publishSnapshot(); memoryPreviewOwner = localOwner }) return false
+            chatPreviewRepository.remember(localOwner, durableId, snapshotEntries, snapshotCache.capturedAtMillis,
+                _uiState.value.sessionTitle, snapshotCache.messagesOmitted)
+        } else publishSnapshot()
         return true
+    }
+
+    private fun preserveMemoryPreviewAfterFailure(message: String): Boolean {
+        val owner = memoryPreviewOwner ?: return false
+        val memory = chatPreviewRepository ?: return false
+        if (_uiState.value.savedSnapshotCapturedAtMillis == null || _uiState.value.runtimeSessionId != null) return false
+        return memory.withOwner(owner) {
+            _uiState.update { it.copy(isInitialLoading = false, isCachedHistoryPreview = false,
+                errorMessage = message, submitBlockedReason = null) }
+        }
+    }
+
+    private fun publishMemoryPreview(snapshot: ChatPreviewSnapshot) {
+        memoryPreviewOwner = snapshot.owner
+        capturedPreviewOwner = snapshot.owner
+        _uiState.update { state -> state.copy(timeline = snapshot.timeline, runtimeSessionId = null,
+            sessionTitle = state.sessionTitle ?: snapshot.title,
+            savedSnapshotCapturedAtMillis = snapshot.capturedAtMillis,
+            isCachedHistoryPreview = gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED,
+            isInitialLoading = true, hasAcceptedStoredHistory = false,
+            historyBeginState = if (snapshot.messagesOmitted) ChatUiState.HistoryBeginState.NON_EXHAUSTIVE
+                else ChatUiState.HistoryBeginState.REACHED) }
+    }
+
+    private suspend fun retainHostPreview(durableId: String, entries: List<TimelineEntry>, omitted: Boolean,
+        current: suspend () -> Boolean) {
+        val memory = chatPreviewRepository ?: return
+        // The caller just published accepted host evidence on Main. Reuse validated local
+        // authority synchronously, so Back cannot cancel retention behind ancillary IO.
+        val readyOwner = capturedPreviewOwner ?: memoryPreviewOwner
+        if (readyOwner != null && memory.remember(readyOwner, durableId, entries, clock(),
+                _uiState.value.sessionTitle, omitted)) return
+        try {
+            val owner = conversationCacheRepository?.captureReadOwner() ?: return
+            if (!current()) return
+            memory.remember(owner, durableId, entries, clock(), _uiState.value.sessionTitle, omitted)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Retention failure cannot disturb accepted host history. */ }
     }
 
     /**
@@ -4843,6 +4919,8 @@ class ChatViewModel(
      * synchronously on the caller's context instead of a doomed launch.
      */
     override fun onCleared() {
+        stopPreviewObservation?.invoke()
+        stopPreviewObservation = null
         editGeneration++
         editJob?.cancel()
         editAccess = null

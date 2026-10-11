@@ -40,7 +40,8 @@ class ConversationCacheReadOwner internal constructor(
     internal val partition: CacheAccessPartition,
     internal val selectedContext: String?,
     internal val loginGeneration: Long,
-    internal val cacheGeneration: Long
+    internal val cacheGeneration: Long,
+    internal val previewGeneration: Long = 0
 ) { override fun toString() = "ConversationCacheReadOwner([redacted])" }
 
 /**
@@ -317,6 +318,10 @@ interface VaultStorage : CacheLifecycleStore {
         storedSessionId: String,
         nowMillis: Long = System.currentTimeMillis()
     ): CacheReadResult<ConversationCacheV2> = CacheReadResult.Absent
+
+    /** Process-local gate: callbacks must be short, non-suspending and perform no vault IO. */
+    fun withConversationPreviewOwner(owner: ConversationCacheReadOwner, publish: () -> Unit): Boolean = false
+    fun observeConversationPreviewInvalidation(observer: () -> Unit): () -> Unit = {}
 
     /** Unsupported stores cannot authorize a connected cache preview. */
     suspend fun captureConversationCacheReadOwner(): ConversationCacheReadOwner? = null
