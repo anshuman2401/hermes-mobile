@@ -18,6 +18,9 @@ class BotFavouritesViewModelTest {
         val base = BotsViewModelTest.Repository()
         var names = listOf("Beta", "missing-bot", "Alpha")
         var fail = false
+        var fresh = true
+        var failRead = false
+        override fun isFresh(scope: BotScope) = fresh
         var favouritesGate: CompletableDeferred<Unit>? = null
         var rosterGate: CompletableDeferred<Unit>? = null
         var saveGate: CompletableDeferred<Unit>? = null
@@ -33,6 +36,7 @@ class BotFavouritesViewModelTest {
                 AuthCredential(driverKind = "cookie_session", providerId = "password", canonicalOrigin = scope.target.normalizedOrigin, cookies = mapOf("session_id" to "synthetic-cookie"))))
         override suspend fun favourites(scope: BotScope): BotFavourites {
             favouritesGate?.await()
+            if (failRead) error("Synthetic favourites read failure")
             return record(scope)
         }
         override suspend fun setFavourite(scope: BotScope, expected: BotFavourites, name: String, favourite: Boolean): BotFavourites {
@@ -96,6 +100,35 @@ class BotFavouritesViewModelTest {
         assertEquals("Beta", initial(vm)?.profile?.name)
         val old = vm.uiState.value; vm.leave()
         assertNull(vm.takeInitialFavourite(old, "synthetic-profile", origin, true, null, true))
+    }
+
+    @Test fun refreshKeepsFavouritesAndDoesNotRepeatInitialSelection() = runTest {
+        val repo = Repo(); val vm = BotsViewModel(repo); vm.enter("synthetic-profile", origin); runCurrent()
+        assertEquals("Beta", initial(vm)?.profile?.name)
+        val before = vm.favourites.value.names
+        repo.favouritesGate = CompletableDeferred(); repo.rosterGate = CompletableDeferred()
+        vm.retry(); runCurrent()
+        assertEquals(before, vm.favourites.value.names)
+        assertTrue(vm.uiState.value is com.hermes.bot.feature.bots.BotsUiState.Content)
+        repo.favouritesGate!!.complete(Unit); repo.rosterGate!!.complete(Unit); runCurrent()
+        assertNull(initial(vm)); vm.leave()
+    }
+
+    @Test fun failedFavouritesRefreshRetainsNamesAndDisablesStaleOwnership() = runTest {
+        val repo = Repo(); val vm = BotsViewModel(repo); vm.enter("synthetic-profile", origin); runCurrent()
+        val before = vm.favourites.value.names
+        repo.failRead = true; vm.retry(); runCurrent()
+        assertEquals(before, vm.favourites.value.names); assertFalse(vm.favourites.value.available)
+        assertNull(initial(vm)); assertNotNull(vm.favourites.value.error)
+        vm.setFavourite("Alpha", false); runCurrent(); assertEquals(before, repo.names)
+        vm.leave()
+    }
+
+    @Test fun initialSelectionWaitsForFreshRoster() = runTest {
+        val repo = Repo(); repo.fresh = false
+        val vm = BotsViewModel(repo); vm.enter("synthetic-profile", origin); runCurrent()
+        assertNull(initial(vm))
+        repo.fresh = true; assertEquals("Beta", initial(vm)?.profile?.name); vm.leave()
     }
 
     @Test fun savedOrderMissingNamesAndFailedSaveRemainHonest() = runTest {

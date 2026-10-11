@@ -54,7 +54,13 @@ class BotsRouteWiringTest {
         assertTrue(screen.contains("inJustDecodeBounds = true"))
         assertTrue(screen.contains("Dispatchers.IO"))
         assertTrue(screen.contains("160"))
-        assertTrue(screen.contains("Screen status unknown"))
+        listOf("Checking screen", "Screen status unknown", "Screen unavailable", "Screen stopped", "Screen running", "Stopping…").forEach {
+            assertFalse(screen.contains(it))
+        }
+        assertTrue(screen.contains("viewModel?.pollScreenStatus()"))
+        assertTrue(screen.contains("rememberLazyListState()"))
+        assertTrue(screen.contains("viewModel?.demandAvatars("))
+        assertTrue(screen.contains("cache.get(scope, row.profile.name, row.avatar, decoder)"))
         assertTrue(screen.contains("Stop screen"))
         assertTrue(screen.contains("AlertDialog("))
         val strings = source("res/values/strings.xml")

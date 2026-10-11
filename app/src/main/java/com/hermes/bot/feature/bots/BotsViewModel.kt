@@ -13,6 +13,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.coroutines.launch
 
 sealed interface BotsUiState {
@@ -20,7 +26,8 @@ sealed interface BotsUiState {
     data object Loading : BotsUiState
     data object Empty : BotsUiState
     data object Error : BotsUiState
-    data class Content(val scope: BotScope, val rows: List<BotRow>) : BotsUiState
+    data class Content(val scope: BotScope, val rows: List<BotRow>, val refreshing: Boolean = false,
+        val stale: Boolean = false, val refreshFailed: Boolean = false) : BotsUiState
 }
 
 data class BotScreenOverviewState(
@@ -32,7 +39,8 @@ data class BotScreenOverviewState(
 )
 
 class BotsViewModel(internal val configuredRepository: BotRepository,
-                    private val screenOverview: ScreenOverviewRepository? = null) : ViewModel() {
+                    private val screenOverview: ScreenOverviewRepository? = null,
+                    internal val thumbnails: BotThumbnailCache<ImageBitmap>? = null) : ViewModel() {
     private val mutableState = MutableStateFlow<BotsUiState>(BotsUiState.Disconnected)
     val uiState = mutableState.asStateFlow()
     data class FavouritesState(val names: List<String> = emptyList(), val loading: Boolean = false,
@@ -54,6 +62,9 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
     private var initialFavouriteAttempted = false
     private var loadJob: Job? = null
     private var connectionJob: Job? = null
+    private var avatarJob: Job? = null
+    private var avatarEpoch = 0L
+    private val avatarDemand = MutableStateFlow<List<String>>(emptyList())
 
     fun enter(localId: String?, normalizedOrigin: String?) {
         val next = if (!localId.isNullOrBlank() && !normalizedOrigin.isNullOrBlank()) BotTarget(localId, normalizedOrigin) else null
@@ -66,7 +77,7 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
         target = next
         reconcile()
         connectionJob = viewModelScope.launch {
-            configuredRepository.connectionStatus.collect { reconcile() }
+            combine(configuredRepository.connectionStatus, configuredRepository.invalidation) { _, _ -> Unit }.collect { reconcile() }
         }
     }
 
@@ -80,6 +91,9 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
 
     private fun invalidate() {
         epoch++
+        avatarEpoch++
+        avatarJob?.cancel(); avatarJob = null
+        avatarDemand.value = emptyList()
         screenEpoch++
         screenReadJob?.cancel(); screenReadJob = null
         screenStopJob?.cancel(); screenStopJob = null
@@ -119,6 +133,7 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
             val status = try { overview.status(scope, profile) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
+            currentCoroutineContext().ensureActive()
             if (ownsScreen(scope, profile, operation)) {
                 screenOverviewState.value = screenOverviewState.value.copy(loading = false, status = status)
             }
@@ -131,7 +146,8 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
         val profile = current.profile ?: return
         val overview = screenOverview ?: return
         if (!visible || !configuredRepository.isCurrent(scope) || current.stopping ||
-            current.status?.running != true || current.status.lease.holder != ScreenLease.Holder.BOT) return
+            current.loading || current.status?.supported != true || !current.status.installed ||
+            !current.status.running || current.status.lease.holder != ScreenLease.Holder.BOT) return
         screenEpoch++
         val operation = screenEpoch
         screenReadJob?.cancel(); screenReadJob = null
@@ -140,15 +156,17 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
             val stopped = try { overview.stop(scope, profile) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
+            currentCoroutineContext().ensureActive()
             // The write may have reached Hermes even when its reply was lost. Read once; never resend it.
             val confirmed = try { overview.status(scope, profile) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
+            currentCoroutineContext().ensureActive()
             if (ownsScreen(scope, profile, operation)) {
                 screenOverviewState.value = BotScreenOverviewState(profile = profile,
                     status = confirmed ?: stopped,
                     message = if (confirmed?.running == false || (confirmed == null && stopped?.running == false)) null
-                        else "Stop not confirmed. Check screen status before trying again.")
+                        else "Open screen to check whether it stopped before trying again.")
             }
         }
     }
@@ -170,37 +188,118 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
     fun retry() {
         if (!visible || loadJob?.isActive == true) return
         val captured = target?.let(configuredRepository::capture)
-        if (captured == null) invalidate() else startLoad(captured)
+        if (captured == null) invalidate()
+        else if (captured != activeScope) startLoad(captured)
+        else {
+            if (favouriteJob?.isActive != true && !favouritesState.value.saving) loadFavourites(captured, epoch)
+            loadRoster(captured, force = true)
+        }
     }
+
+    private fun owns(scope: BotScope, operation: Long): Boolean = visible && operation == epoch &&
+        target == scope.target && activeScope == scope && configuredRepository.isCurrent(scope)
 
     private fun startLoad(scope: BotScope) {
         invalidate()
         activeScope = scope
-        val operation = epoch
-        fun ownsPresentation() = visible && operation == epoch && target == scope.target && configuredRepository.isCurrent(scope)
-        mutableState.value = BotsUiState.Loading
-        favouritesState.value = FavouritesState(loading = true)
+        val cached = configuredRepository.cached(scope)
+        mutableState.value = cached?.rows?.takeIf { it.isNotEmpty() }?.let {
+            BotsUiState.Content(scope, it, stale = !configuredRepository.isFresh(scope))
+        } ?: BotsUiState.Loading
+        loadFavourites(scope, epoch)
+        loadRoster(scope, force = false)
+    }
+
+    private fun loadFavourites(scope: BotScope, operation: Long) {
+        favouritesState.value = favouritesState.value.copy(loading = true, error = null)
         favouriteJob = viewModelScope.launch {
             try {
                 val record = configuredRepository.favourites(scope)
-                if (ownsPresentation()) {
+                if (owns(scope, operation)) {
                     savedFavourites = record
-                    favouritesState.value = FavouritesState(record?.names.orEmpty(), available = record != null,
+                    favouritesState.value = FavouritesState(record?.names ?: favouritesState.value.names, available = record != null,
                         error = if (record == null) "Favourites unavailable" else null)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { if (ownsPresentation()) favouritesState.value = FavouritesState(error = "Couldn't load favourites. Retry bots to try again.") }
+            catch (_: Exception) { if (owns(scope, operation)) {
+                savedFavourites = null
+                favouritesState.value = favouritesState.value.copy(loading = false, available = false,
+                    error = "Couldn't load favourites. Retry bots to try again.")
+            } }
         }
+    }
+
+    private fun loadRoster(scope: BotScope, force: Boolean) {
+        val operation = epoch
+        val content = mutableState.value as? BotsUiState.Content
+        if (content != null) mutableState.value = content.copy(refreshing = true, stale = !configuredRepository.isFresh(scope), refreshFailed = false)
+        else mutableState.value = BotsUiState.Loading
         loadJob = viewModelScope.launch {
             try {
-                configuredRepository.load(scope) { rows ->
-                    if (ownsPresentation()) mutableState.value = if (rows.isEmpty()) BotsUiState.Empty else BotsUiState.Content(scope, rows.toList())
+                val publish: (List<BotRow>) -> Unit = { rows ->
+                    if (owns(scope, operation)) {
+                        val previous = (mutableState.value as? BotsUiState.Content)?.rows.orEmpty()
+                        mutableState.value = if (rows.isEmpty()) BotsUiState.Empty else BotsUiState.Content(scope, withVisibleAvatars(rows, previous))
+                        avatarEpoch++
+                        val avatarOperation = avatarEpoch
+                        avatarJob?.cancel()
+                        avatarJob = viewModelScope.launch {
+                            try {
+                                configuredRepository.avatars(scope, avatarDemand) { updated ->
+                                    if (avatarOperation == avatarEpoch && owns(scope, operation)) {
+                                        val current = mutableState.value as? BotsUiState.Content
+                                        if (current != null) mutableState.value = current.copy(rows = withVisibleAvatars(updated, current.rows))
+                                    }
+                                }
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { /* Roster and initial-letter images remain usable. */ }
+                        }
+                    }
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                if (ownsPresentation()) mutableState.value = BotsUiState.Error
-                else if (operation == epoch) mutableState.value = BotsUiState.Disconnected
+                if (force) configuredRepository.refresh(scope, publish) else configuredRepository.load(scope, publish)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (owns(scope, operation)) {
+                    val retained = mutableState.value as? BotsUiState.Content
+                    mutableState.value = retained?.copy(refreshing = false, refreshFailed = true) ?: BotsUiState.Error
+                } else if (operation == epoch) mutableState.value = BotsUiState.Disconnected
+            }
+        }
+    }
+
+    /** Visible images may outlive encoded-cache eviction; removed visibility releases these references. */
+    private fun withVisibleAvatars(rows: List<BotRow>, previous: List<BotRow>): List<BotRow> {
+        val visibleNames = avatarDemand.value.toSet()
+        val oldImages = previous.associate { it.profile.name to it.avatar }
+        return rows.map { row ->
+            if (row.avatar == null && row.profile.hasAvatar && row.profile.name in visibleNames)
+                row.copy(avatar = oldImages[row.profile.name]) else row
+        }
+    }
+
+    /** UI reports ordered visibility; scheduling and reads stay behind the repository. */
+    fun demandAvatars(selected: String?, favourites: List<String>, picker: List<String>) {
+        avatarDemand.value = (listOfNotNull(selected) + favourites + picker).distinct()
+    }
+
+    fun dismissScreenMessage() { screenOverviewState.value = screenOverviewState.value.copy(message = null) }
+
+    /** A structured foreground operation; each delay begins after the previous read completes. */
+    suspend fun pollScreenStatus() {
+        if (screenScope == null || screenOverviewState.value.profile == null) return
+        var ownedRead: Job? = null
+        try {
+            while (kotlin.coroutines.coroutineContext.isActive) {
+                refreshScreenStatus()
+                ownedRead = screenReadJob
+                ownedRead?.join()
+                delay(if (screenOverviewState.value.status?.running == true) 15_000L else 60_000L)
+            }
+        } finally {
+            ownedRead?.cancel()
+            if (screenReadJob === ownedRead) {
+                screenReadJob = null
+                screenOverviewState.value = screenOverviewState.value.copy(loading = false)
             }
         }
     }
@@ -243,7 +342,7 @@ class BotsViewModel(internal val configuredRepository: BotRepository,
         if (channel != null || !selectionAllowed || initialFavouriteAttempted) return null
         val content = presentation(state, localId, normalizedOrigin, connected) as? BotsUiState.Content ?: return null
         val saved = favouritesState.value
-        if (!saved.available || saved.loading || saved.saving) return null
+        if (content.stale || !configuredRepository.isFresh(content.scope) || !saved.available || saved.loading || saved.saving) return null
         val first = saved.names.firstNotNullOfOrNull { name -> content.rows.firstOrNull { it.profile.name == name } }
             ?: return null
         initialFavouriteAttempted = true

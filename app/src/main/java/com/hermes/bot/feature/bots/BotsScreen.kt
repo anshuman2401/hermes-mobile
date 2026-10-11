@@ -7,6 +7,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.flow.distinctUntilChanged
+import com.hermes.bot.data.bots.BotScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,8 +40,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.hermes.bot.data.botscreen.ScreenLease
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hermes.bot.R
 import com.hermes.bot.data.bots.BotRow
@@ -119,6 +120,8 @@ fun BotsScreen(
     val screenFallback = remember { MutableStateFlow(BotScreenOverviewState()) }
     val screen by (viewModel?.screenState ?: screenFallback).collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
+    val favouritesListState = rememberLazyListState()
+    val pickerListState = rememberLazyListState()
     var showPicker by androidx.compose.runtime.saveable.rememberSaveable(localId, normalizedOrigin) {
         androidx.compose.runtime.mutableStateOf(false)
     }
@@ -135,17 +138,26 @@ fun BotsScreen(
     LaunchedEffect(viewModel, selectedRow?.profile?.name, (admitted as? BotsUiState.Content)?.scope, lifecycleOwner) {
         viewModel?.selectScreen(selectedRow?.profile?.name)
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (isActive) {
-                viewModel?.refreshScreenStatus()
-                delay(15_000)
-            }
+            viewModel?.pollScreenStatus()
         }
     }
+    LaunchedEffect(viewModel, selectedRow?.profile?.name, favourites.names, rows.map { it.profile.name }, showPicker) {
+        snapshotFlow {
+            val favouriteNames = favourites.names.filter { name -> rows.any { it.profile.name == name } }
+            Triple(selectedRow?.profile?.name,
+                favouritesListState.layoutInfo.visibleItemsInfo.mapNotNull { favouriteNames.getOrNull(it.index) },
+                if (showPicker) pickerListState.layoutInfo.visibleItemsInfo.mapNotNull { rows.getOrNull(it.index)?.profile?.name } else emptyList())
+        }.distinctUntilChanged().collect { (selected, favouriteNames, pickerNames) ->
+            viewModel?.demandAvatars(selected, favouriteNames, pickerNames)
+        }
+    }
+    val rosterScope = (admitted as? BotsUiState.Content)?.scope
     val actionsAllowed = !selecting && admitted is BotsUiState.Content
-    val favouritesAllowed = actionsAllowed && favourites.available && !favourites.loading && !favourites.saving
+    val selectionAllowed = actionsAllowed && (admitted as? BotsUiState.Content)?.stale == false
+    val favouritesAllowed = selectionAllowed && favourites.available && !favourites.loading && !favourites.saving
     val selectBot by androidx.compose.runtime.rememberUpdatedState(onSelect)
     androidx.compose.runtime.LaunchedEffect(viewModel, admitted, favourites, localId, normalizedOrigin, connected, channel, selecting) {
-        viewModel?.takeInitialFavourite(admitted, localId, normalizedOrigin, connected, channel, actionsAllowed)
+        viewModel?.takeInitialFavourite(admitted, localId, normalizedOrigin, connected, channel, selectionAllowed)
             ?.let { selectBot(it) }
     }
     AtelierTheme(currentTheme) {
@@ -160,18 +172,18 @@ fun BotsScreen(
             if (admitted is BotsUiState.Content) {
                 Text("Favourites", Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                androidx.compose.foundation.lazy.LazyRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+                androidx.compose.foundation.lazy.LazyRow(state = favouritesListState, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     items(favourites.names.mapNotNull { name -> rows.firstOrNull { it.profile.name == name } }, key = { it.profile.name }) { row ->
                         val active = row.profile.name == channel
-                        androidx.compose.material3.Surface(onClick = { onSelect(row) }, enabled = actionsAllowed,
+                        androidx.compose.material3.Surface(onClick = { onSelect(row) }, enabled = selectionAllowed,
                             shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
                             color = if (active) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.background,
                             border = if (active) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
                             modifier = Modifier.width(76.dp).semantics { selected = active }) {
                             Column(Modifier.padding(vertical = 10.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                BotRowAvatar(row, decoder, compact = true)
+                                BotRowAvatar(row, decoder, compact = true, scope = rosterScope, cache = viewModel?.thumbnails)
                                 Text(row.profile.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.labelMedium.boardReduced(),
                                     color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
@@ -193,12 +205,17 @@ fun BotsScreen(
                         TextButton(onClick = { viewModel?.retry() }, enabled = !selecting && !favourites.saving) { Text("Retry") }
                     }
                 }
+                if (admitted.refreshFailed) Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Couldn't refresh bots.", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = { viewModel?.retry() }, enabled = !admitted.refreshing && !selecting) { Text("Retry") }
+                }
                 if (favourites.loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
                 androidx.compose.material3.HorizontalDivider(Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 if (selectedRow != null) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        BotRowAvatar(selectedRow, decoder)
+                        BotRowAvatar(selectedRow, decoder, scope = rosterScope, cache = viewModel?.thumbnails)
                         Column(Modifier.weight(1f)) {
                             Text(selectedRow.profile.displayName, style = MaterialTheme.typography.titleMedium.boardReduced(), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(conversationCount?.let { "$it conversations" } ?: "Conversations", style = MaterialTheme.typography.bodySmall.boardReduced(),
@@ -210,7 +227,8 @@ fun BotsScreen(
                                 tint = if (actionsAllowed) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f))
                         }
-                        IconButton(onClick = onRefreshChannel, enabled = actionsAllowed && conversationCount != null, modifier = Modifier.size(48.dp)) {
+                        IconButton(onClick = { viewModel?.retry(); onRefreshChannel() },
+                            enabled = !selecting && !admitted.refreshing && conversationCount != null, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh conversations")
                         }
                         FavouriteButton(selectedRow.profile.displayName, selectedRow.profile.name in favourites.names, favouritesAllowed) {
@@ -219,27 +237,12 @@ fun BotsScreen(
                     }
                     val selectedScreen = screen.takeIf { it.profile == selectedRow.profile.name }
                     val screenStatus = selectedScreen?.status
-                    val screenLabel = when {
-                        selectedScreen == null || selectedScreen.loading -> "Checking screen…"
-                        screenStatus == null -> "Screen status unknown"
-                        !screenStatus.supported || !screenStatus.installed -> "Screen unavailable"
-                        !screenStatus.running -> "Screen stopped"
-                        screenStatus.lease.holder == ScreenLease.Holder.HUMAN -> "Screen running · Human controls"
-                        else -> "Screen running"
-                    }
-                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(screenLabel, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            selectedScreen?.message?.let { Text(it, style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error) }
-                        }
-                        if (screenStatus?.supported == true && screenStatus.installed && screenStatus.running &&
-                            screenStatus.lease.holder == ScreenLease.Holder.BOT && selectedScreen.loading == false) {
+                    if (screenStatus?.supported == true && screenStatus.installed && screenStatus.running &&
+                        screenStatus.lease.holder == ScreenLease.Holder.BOT) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = { showStopConfirmation = true },
-                                enabled = actionsAllowed && !selectedScreen.stopping) {
-                                Text(if (selectedScreen.stopping) "Stopping…" else "Stop screen")
+                                enabled = actionsAllowed && selectedScreen?.loading == false && !selectedScreen.stopping) {
+                                Text("Stop screen")
                             }
                         }
                     }
@@ -258,7 +261,12 @@ fun BotsScreen(
             } else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 when (admitted) {
                     BotsUiState.Loading -> CircularProgressIndicator()
-                    BotsUiState.Empty -> Text(stringResource(R.string.bots_empty))
+                    BotsUiState.Empty -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(stringResource(R.string.bots_empty))
+                        IconButton(onClick = { viewModel?.retry() }, enabled = !selecting) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh bots")
+                        }
+                    }
                     BotsUiState.Error -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(stringResource(R.string.bots_error))
                         TextButton(onClick = { viewModel?.retry() }) { Text(stringResource(R.string.bots_retry)) }
@@ -266,6 +274,11 @@ fun BotsScreen(
                     else -> Text(stringResource(R.string.bots_disconnected))
                 }
             }
+        }
+        screen.message?.takeIf { selectedRow != null && screen.profile == selectedRow.profile.name }?.let { message ->
+            AlertDialog(onDismissRequest = { viewModel?.dismissScreenMessage() },
+                title = { Text("Couldn't confirm stop") }, text = { Text(message) },
+                confirmButton = { TextButton(onClick = { viewModel?.dismissScreenMessage() }) { Text("OK") } })
         }
         if (showStopConfirmation) AlertDialog(
             onDismissRequest = { showStopConfirmation = false },
@@ -276,15 +289,20 @@ fun BotsScreen(
         )
         if (showPicker) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showPicker = false },
             containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-            Text("All bots", Modifier.padding(horizontal = 22.dp, vertical = 8.dp), style = MaterialTheme.typography.headlineSmall)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("All bots", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                IconButton(onClick = { viewModel?.retry() }, enabled = !selecting && (admitted as? BotsUiState.Content)?.refreshing != true) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh bots")
+                }
+            }
             Text("Star a bot to keep it in your favourites.", Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             favourites.error?.let { Text(it, Modifier.padding(horizontal = 22.dp), color = MaterialTheme.colorScheme.error) }
             if (rows.isEmpty()) Text("Bots are unavailable. Close this picker and retry.", Modifier.padding(22.dp))
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).navigationBarsPadding()) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).navigationBarsPadding(), state = pickerListState) {
                 items(rows, key = { it.profile.name }) { row ->
                     Row(Modifier.fillMaxWidth().padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { BotListRow(row, decoder, actionsAllowed) { showPicker = false; onSelect(row) } }
+                        Box(Modifier.weight(1f)) { BotListRow(row, decoder, selectionAllowed, rosterScope, viewModel?.thumbnails) { showPicker = false; onSelect(row) } }
                         FavouriteButton(row.profile.displayName, row.profile.name in favourites.names, favouritesAllowed) {
                             viewModel?.setFavourite(row.profile.name, row.profile.name !in favourites.names)
                         }
@@ -305,8 +323,12 @@ private fun FavouriteButton(name: String, favourite: Boolean, enabled: Boolean, 
 }
 
 @Composable
-private fun BotRowAvatar(row: BotRow, decoder: suspend (ByteArray) -> ImageBitmap?, compact: Boolean = false) {
-    val image by produceState<ImageBitmap?>(null, row.avatar, decoder) { value = decodeBotAvatar(row.avatar?.bytes, decoder) }
+private fun BotRowAvatar(row: BotRow, decoder: suspend (ByteArray) -> ImageBitmap?, compact: Boolean = false,
+    scope: BotScope? = null, cache: BotThumbnailCache<ImageBitmap>? = null) {
+    val image by produceState<ImageBitmap?>(null, row.avatar, decoder, scope) {
+        value = if (scope != null && cache != null) cache.get(scope, row.profile.name, row.avatar, decoder)
+            else decodeBotAvatar(row.avatar?.bytes, decoder)
+    }
     Box((if (compact) Modifier.size(30.dp) else Modifier.size(40.dp)).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
         val bitmap = image
         if (bitmap != null) Image(bitmap, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -316,10 +338,11 @@ private fun BotRowAvatar(row: BotRow, decoder: suspend (ByteArray) -> ImageBitma
 }
 
 @Composable
-private fun BotListRow(row: BotRow, decoder: suspend (ByteArray) -> ImageBitmap?, enabled: Boolean, onClick: () -> Unit) {
+private fun BotListRow(row: BotRow, decoder: suspend (ByteArray) -> ImageBitmap?, enabled: Boolean,
+    scope: BotScope?, cache: BotThumbnailCache<ImageBitmap>?, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).defaultMinSize(minHeight = 56.dp).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        BotRowAvatar(row, decoder)
+        BotRowAvatar(row, decoder, scope = scope, cache = cache)
         Text(row.profile.displayName, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
     }
