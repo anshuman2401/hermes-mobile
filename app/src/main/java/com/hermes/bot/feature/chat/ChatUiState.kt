@@ -196,6 +196,9 @@ data class ChatUiState(
     val contextUsage: ContextUsagePresentation = ContextUsagePresentation(),
     val compressionPhase: CompressionPhase = CompressionPhase.IDLE,
     val subagents: SubagentChatState = SubagentChatState(),
+    val commandSuggestion: String? = null,
+    val queueEnabled: Boolean = false,
+    val queue: com.hermes.bot.data.queue.ChatQueueState = com.hermes.bot.data.queue.ChatQueueState(),
     val compressionNotice: String? = null
 ) {
     /** Loading gates actions even when an already displayed transcript remains readable. */
@@ -251,8 +254,29 @@ data class ChatUiState(
     val isSlashCommand: Boolean get() =
         com.hermes.bot.data.commands.SlashCommandPolicy.parse(composerDraft) != null &&
             pendingImages.isEmpty() && pendingFiles.isEmpty()
+    /** Idle prompts use direct send; only busy chat or existing intent needs FIFO. */
+    val shouldQueuePrompt: Boolean get() = queueEnabled && (isStreaming || isSubmitting ||
+        slashBusy || isCompressionBusy || queue.waiting.isNotEmpty() || queue.active != null)
+    val queuesComposerInput: Boolean get() = shouldQueuePrompt ||
+        (queueEnabled && isSlashCommand && !isImmediateSlash)
+
+    val canEnqueue: Boolean get() = queueEnabled && queue.loaded && !queue.isFull &&
+        edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable &&
+        composerDraft.isNotBlank() && !runtimeSessionId.isNullOrBlank() && !isInitialLoading &&
+        !isAttachingImage && !isAttachingFile && pendingImages.isEmpty() && pendingFiles.isEmpty() &&
+        savedSnapshotCapturedAtMillis == null
+
+    val isImmediateSlash: Boolean get() {
+        val command = com.hermes.bot.data.commands.SlashCommandPolicy.parse(composerDraft) ?: return false
+        return command.name in setOf("stop", "new", "reset", "clear", "resume", "sessions", "switch") ||
+            (command.name in setOf("model", "reasoning") && command.argument.isBlank())
+    }
+    private val queueAllowsAttachments: Boolean get() = !queueEnabled ||
+        (queue.loaded && queue.pause != com.hermes.bot.data.queue.QueuePause.STORAGE && queue.waiting.isEmpty() && queue.active == null)
     val isComposerReady: Boolean
-        get() = edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable &&
+        get() = if (queueEnabled && (queuesComposerInput || isImmediateSlash) && pendingImages.isEmpty() && pendingFiles.isEmpty()) canEnqueue ||
+            (isImmediateSlash && edit == null && unknownEditId == null && !voice.isBusy &&
+                !runtimeSessionId.isNullOrBlank() && savedSnapshotCapturedAtMillis == null && !isInitialLoading) else edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable && queueAllowsAttachments &&
             (composerDraft.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()) &&
             !runtimeSessionId.isNullOrBlank() &&
             !isInitialLoading &&
@@ -270,14 +294,19 @@ data class ChatUiState(
     val canAttachImage: Boolean
         get() = edit == null && unknownEditId == null && !voice.isBusy && !runtimeSessionId.isNullOrBlank() &&
             !isInitialLoading && !isRefreshing && !isSubmitting && !isStreaming && !slashBusy && !isCompressionBusy &&
+            queueAllowsAttachments &&
             !isAttachingImage && !isAttachingFile && submitBlockedReason == null &&
             savedSnapshotCapturedAtMillis == null && isAttachmentConnectionAvailable
 
     val isCompressionBusy: Boolean get() = compressionPhase != CompressionPhase.IDLE
-    val canCompressContext: Boolean get() = canAttachImage && !isCompressionBusy &&
+    val canCompressContext: Boolean get() = if (queueEnabled) canQueueCommand else canAttachImage && !isCompressionBusy &&
         !pickerBusy && pendingUnknownTurnId == null
 
-    val canToggleYolo: Boolean get() = sessionYolo != null && !yoloPending && !yoloUnconfirmed && canAttachImage
+    val canQueueCommand: Boolean get() = queueEnabled && queue.loaded && !queue.isFull &&
+        edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable &&
+        !runtimeSessionId.isNullOrBlank() && !isInitialLoading &&
+        !isAttachingImage && !isAttachingFile && pendingImages.isEmpty() && pendingFiles.isEmpty() && savedSnapshotCapturedAtMillis == null
+    val canToggleYolo: Boolean get() = if (queueEnabled) canQueueCommand else sessionYolo != null && !yoloPending && !yoloUnconfirmed && canAttachImage
 
     val canStartDictation: Boolean get() = dictationAvailable && canAttachImage &&
         !pickerBusy && pendingUnknownTurnId == null
@@ -289,6 +318,7 @@ data class ChatUiState(
             savedSnapshotCapturedAtMillis != null -> "Reconnect to add attachments to this saved snapshot."
             runtimeSessionId.isNullOrBlank() || submitBlockedReason == SubmitBlockedReason.NO_RUNTIME ->
                 null
+            queueEnabled && (queue.waiting.isNotEmpty() || queue.active != null) -> "Attachments are available when the queue is empty and chat is idle."
             !isAttachmentConnectionAvailable -> "Reconnect to add attachments."
             else -> null
         }

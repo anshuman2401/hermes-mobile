@@ -1,5 +1,7 @@
 # Contributing
 
+Hermes Mobile is the primary app. Target future Android features here; Hermes Bot Android is reference-only unless the maintainer explicitly requests otherwise. Existing Bot Android branches and commits remain unmerged.
+
 Read [AGENTS.md](AGENTS.md) before working on this repository and follow the [Code of Conduct](CODE_OF_CONDUCT.md) when participating. Start a bounded branch from current `origin/main`, use an isolated worktree, and check the relevant implementation, tests, and [current-system guide](specs/architecture/current-system.md) before editing. Follow [SECURITY.md](SECURITY.md) for suspected vulnerabilities. Keep host, credential, owner-content, and machine-specific details out of commits, examples, screenshots, and issue or PR text. Use only synthetic fixtures for automated checks.
 
 For documentation-only changes, review the wording and links and run `git diff --check`. For code, tests, resources, dependencies, build files, scripts, or CI changes, follow the [verification runbook](specs/testing/verification.md): run relevant focused checks, `./scripts/verify.sh`, then commit a clean candidate and run `./scripts/verify.sh --final-candidate`. Run these commands locally before opening or updating a pull request. The verifier runs policy checks, JVM tests, lint, and debug APK assembly; device/emulator and live-host checks are separate. Use synthetic data only. Never use a live Hermes host for automated tests.

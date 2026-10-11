@@ -544,6 +544,20 @@ class DefaultSessionRepository(
     override suspend fun detachImage(runtimeSessionId: String, serverPath: String): GatewayResult<DetachImageResult> =
         gatewayAdapter.detachImage(runtimeSessionId, serverPath)
 
+    override suspend fun capturePromptSubmissionAccess(storedId: String, runtimeId: String): com.hermes.bot.data.turn.PromptSubmissionAccess? {
+        val owner = captureSendActivityOwner(storedId, runtimeId) ?: return null
+        val origin = com.hermes.bot.data.origin.CanonicalOrigin.parse(owner.authority.lease.origin).getOrThrow()
+        return object : com.hermes.bot.data.turn.PromptSubmissionAccess {
+            override suspend fun isCurrent() = isCommandOwnerCurrent(owner)
+            override suspend fun submit(prompt: String): GatewayResult<PromptSubmitResult> {
+                if (!isCurrent()) return GatewayResult.Failure(GatewayFailure.NotConnected())
+                val result = gatewayAdapter.submitPromptScoped(runtimeId, prompt, origin, owner.scope.gatewayGeneration)
+                return if (isCurrent()) result else GatewayResult.Failure(GatewayFailure.SubmissionUnknown("Prompt outcome unknown after session changed"))
+            }
+            override fun toString() = "PromptSubmissionAccess([redacted])"
+        }
+    }
+
     override suspend fun captureMessageEditAccess(storedId: String, runtimeId: String): com.hermes.bot.data.turn.MessageEditAccess? {
         val owner = captureSendActivityOwner(storedId, runtimeId) ?: return null
         val origin = com.hermes.bot.data.origin.CanonicalOrigin.parse(owner.authority.lease.origin).getOrThrow()

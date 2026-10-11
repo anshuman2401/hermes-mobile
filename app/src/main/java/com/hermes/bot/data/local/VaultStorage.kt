@@ -214,6 +214,11 @@ interface VaultStorage : CacheLifecycleStore {
         partition: CacheAccessPartition
     ) {}
 
+    // Local unsent intent, authenticated partition and durable conversation bound.
+    suspend fun readChatQueue(partition: CacheAccessPartition, storedId: String): String? =
+        throw UnsupportedOperationException("Queue storage unavailable")
+    suspend fun writeChatQueue(partition: CacheAccessPartition, storedId: String, json: String, expectedJson: String?): Boolean = false
+
     // Drafts (30 days inactivity expiry)
     suspend fun getDraft(storedSessionId: String): Draft?
     suspend fun saveDraft(draft: Draft)

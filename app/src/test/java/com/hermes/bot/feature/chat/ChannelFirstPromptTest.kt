@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModelStore
 import com.hermes.bot.data.gateway.*
 import com.hermes.bot.data.ledger.PendingTurnLedger
 import com.hermes.bot.data.local.*
+import com.hermes.bot.data.queue.*
 import com.hermes.bot.data.session.*
 import com.hermes.bot.domain.ConnectionStatus
 import com.hermes.bot.test.MainDispatcherRule
@@ -41,11 +42,87 @@ class ChannelFirstPromptTest {
         var outcome = Result.success(SessionResumeResult("runtime-100", "sess-100", 0, emptyList()))
         override suspend fun resumeSession(storedSessionId: String): Result<SessionResumeResult> { deferred?.await(); if (throwOnResume) throw IllegalStateException("synthetic failure"); return outcome }
     }
-    private fun vm(repo: Repo, adapter: Recording, storage: VaultStorage? = null): ChatViewModel {
+    private fun vm(repo: Repo, adapter: Recording, storage: VaultStorage? = null, queueStore: ChatQueueStore? = null): ChatViewModel {
         val vault = storage ?: EncryptedVault(temp.newFolder(), AesGcmCipherEngine(InMemoryMasterKeyProvider()), ioDispatcher = main.testDispatcher)
-        return ChatViewModel("sess-100", sessionRepository = repo, gatewayProtocolAdapter = adapter,
-            vaultStorage = vault, pendingTurnLedger = PendingTurnLedger(vault))
+        // Explicit fake protocol writer for queue-enabled handoff tests only.
+        val scopedRepo = object : SessionRepository by repo {
+            override suspend fun capturePromptSubmissionAccess(storedId: String, runtimeId: String) =
+                object : com.hermes.bot.data.turn.PromptSubmissionAccess {
+                    override suspend fun isCurrent() = queueStore?.isCurrent() == true
+                    override suspend fun submit(prompt: String) = adapter.submitPrompt(runtimeId, prompt)
+                }
+        }
+        return ChatViewModel("sess-100", sessionRepository = scopedRepo, gatewayProtocolAdapter = adapter,
+            vaultStorage = vault, pendingTurnLedger = PendingTurnLedger(vault), chatQueueStore = queueStore)
+            .also { if (queueStore != null) it.setQueueVisibility(true) }
     }
+    @Test fun idleChannelWaitsForDelayedQueueReadThenSendsDirectlyOnce() = runTest {
+        val repo = Repo(); val adapter = Recording(); val saved = MemoryChatQueueStore()
+        val read = CompletableDeferred<Unit>()
+        val delayed = object : ChatQueueStore by saved {
+            override suspend fun read(): ChatQueueState? { read.await(); return saved.read() }
+        }
+        val chat = vm(repo, adapter, queueStore = delayed)
+        chat.acceptChannelFirstPrompt("synthetic-entry", "synthetic first")
+        repo.deferred!!.complete(Unit); runCurrent()
+        assertFalse(chat.uiState.value.queue.loaded); assertTrue(adapter.writes.isEmpty())
+        read.complete(Unit); advanceUntilIdle()
+        assertEquals(listOf("runtime-100" to "synthetic first"), adapter.writes)
+        assertEquals("", chat.uiState.value.composerDraft)
+        assertFalse(chat.acceptChannelFirstPrompt("synthetic-repeat", "synthetic duplicate"))
+        val owner = ViewModelStore().apply { put("chat", chat) }; owner.clear(); advanceUntilIdle()
+        val reopened = vm(repo, adapter, queueStore = saved); advanceUntilIdle()
+        assertNull(reopened.uiState.value.queue.active)
+        assertEquals(1, adapter.writes.size)
+    }
+
+    @Test fun manualSendEditOrDisposalCancelsDelayedQueueHandoff() = runTest {
+        for (action in listOf("send", "edit", "dispose")) {
+            val repo = Repo(); val adapter = Recording(); val saved = MemoryChatQueueStore()
+            val read = CompletableDeferred<Unit>()
+            val delayed = object : ChatQueueStore by saved {
+                override suspend fun read(): ChatQueueState? { read.await(); return saved.read() }
+            }
+            val chat = vm(repo, adapter, queueStore = delayed)
+            chat.acceptChannelFirstPrompt("synthetic-entry", "synthetic first")
+            repo.deferred!!.complete(Unit); runCurrent()
+            when (action) {
+                "send" -> chat.submitPrompt()
+                "edit" -> chat.updateDraft("synthetic edited")
+                else -> ViewModelStore().apply { put("chat", chat); clear() }
+            }
+            read.complete(Unit); advanceUntilIdle()
+            assertTrue(adapter.writes.isEmpty())
+            assertEquals(if (action == "edit") "synthetic edited" else "synthetic first", chat.uiState.value.composerDraft)
+        }
+    }
+
+    @Test fun restoredQueueKeepsChannelHandoffBehindAcceptedIntentWithoutSending() = runTest {
+        val repo = Repo(); val adapter = Recording(); val saved = MemoryChatQueueStore()
+        val prior = ChatQueueCoordinator(saved); prior.restore()
+        assertTrue(prior.enqueue(QueuePayload.Prompt("synthetic earlier")))
+        val chat = vm(repo, adapter, queueStore = saved)
+        chat.acceptChannelFirstPrompt("synthetic-entry", "synthetic first")
+        repo.deferred!!.complete(Unit); advanceUntilIdle()
+        assertTrue(adapter.writes.isEmpty())
+        assertEquals(QueuePause.RESTORED, chat.uiState.value.queue.pause)
+        assertEquals(listOf("synthetic earlier", "synthetic first"),
+            chat.uiState.value.queue.waiting.map { (it.payload as QueuePayload.Prompt).text })
+    }
+
+    @Test fun unavailableQueueStorageRetainsChannelDraftWithoutSending() = runTest {
+        val repo = Repo(); val adapter = Recording(); val saved = MemoryChatQueueStore()
+        val unavailable = object : ChatQueueStore by saved {
+            override suspend fun read(): ChatQueueState? = error("Synthetic unavailable")
+        }
+        val chat = vm(repo, adapter, queueStore = unavailable)
+        chat.acceptChannelFirstPrompt("synthetic-entry", "synthetic first")
+        repo.deferred!!.complete(Unit); advanceUntilIdle()
+        assertTrue(adapter.writes.isEmpty())
+        assertEquals("synthetic first", chat.uiState.value.composerDraft)
+        assertEquals(QueuePause.STORAGE, chat.uiState.value.queue.pause)
+    }
+
     @Test fun waitsForInitialRemoteLoadThenStreamsAndRepliesOnSameSession() = runTest {
         val repo = Repo(); val adapter = Recording(); val chat = vm(repo, adapter)
         assertTrue(chat.acceptChannelFirstPrompt("entry-one", "synthetic first"))

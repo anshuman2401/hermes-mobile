@@ -1033,6 +1033,19 @@ class DefaultGatewayProtocolAdapter(
             is GatewayResult.Success -> GatewayResult.Success(InterruptSessionResult(result.value["ok"]?.asBooleanOrNull() ?: true))
         }
 
+    override suspend fun submitPromptScoped(sessionId: String, text: String, origin: CanonicalOrigin,
+        generation: Long): GatewayResult<PromptSubmitResult> {
+        if (sessionId.isBlank() || text.isBlank())
+            return GatewayResult.Failure(GatewayFailure.IncompatibleProtocol("Invalid queued prompt"))
+        return when (val result = sendScopedReadRpc("prompt.submit", mapOf("session_id" to sessionId, "text" to text),
+            origin, generation, write = true)) {
+            is GatewayResult.Failure -> result
+            is GatewayResult.Success -> if (result.value["status"]?.asStringOrNull() == "streaming")
+                GatewayResult.Success(PromptSubmitResult("streaming", result.value["user_row_id"]?.asLongOrNull()?.takeIf { it > 0 }))
+            else GatewayResult.Failure(GatewayFailure.SubmissionUnknown("Queued prompt admission unknown"))
+        }
+    }
+
     override suspend fun submitPrompt(sessionId: String, text: String): GatewayResult<PromptSubmitResult> {
         return when (val res = sendRpc("prompt.submit", mapOf("session_id" to sessionId, "text" to text))) {
             is GatewayResult.Failure -> res

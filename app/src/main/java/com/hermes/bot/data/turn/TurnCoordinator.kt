@@ -63,12 +63,23 @@ class TurnCoordinator(
     suspend fun submitPrompt(
         storedSessionId: String,
         runtimeSessionId: String,
-        prompt: String
+        prompt: String,
+        // Non-null for persisted queue intent: require captured repository authority
+        // and recheck local ownership after ledger IO, immediately before the writer.
+        queueCurrent: (suspend () -> Boolean)? = null
     ): TurnSubmissionOutcome = submitMutex.withLock {
         val trimmedPrompt = prompt.trim()
         if (trimmedPrompt.isEmpty()) {
             return TurnSubmissionOutcome.ValidationFailed("Prompt cannot be empty")
         }
+
+        val submissionAccess = if (queueCurrent != null) {
+            sessionRepository?.capturePromptSubmissionAccess(storedSessionId, runtimeSessionId)
+                ?: return TurnSubmissionOutcome.ValidationFailed("Queued prompt authority unavailable")
+        } else null
+        suspend fun current(): Boolean = queueCurrent == null ||
+            (queueCurrent() && submissionAccess?.isCurrent() == true)
+        if (!current()) return TurnSubmissionOutcome.ValidationFailed("Queued prompt owner changed")
 
         // Capture the original binding before any ledger IO can suspend or switch its owner.
         val activityOwner = try {
@@ -93,9 +104,17 @@ class TurnCoordinator(
             catch (_: Exception) { /* Metadata cannot prevent the actual prompt write. */ }
         }
 
+        // A revoked owner during preparation must not reach any transport. Closing
+        // this local, unissued record does not assert a remote admission or outcome.
+        if (!current()) {
+            pendingTurnLedger.markResolved(turnId)
+            return TurnSubmissionOutcome.ValidationFailed("Queued prompt owner changed")
+        }
+
         // 3. Issue prompt.submit frame
         val result = try {
-            gatewayAdapter.submitPrompt(runtimeSessionId, trimmedPrompt)
+            if (submissionAccess != null) submissionAccess.submit(trimmedPrompt)
+            else gatewayAdapter.submitPrompt(runtimeSessionId, trimmedPrompt)
         } catch (e: Exception) {
             GatewayResult.Failure(
                 com.hermes.bot.data.gateway.GatewayFailure.Transport(

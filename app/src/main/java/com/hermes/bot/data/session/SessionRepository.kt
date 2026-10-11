@@ -83,6 +83,8 @@ interface SessionRepository {
     val listInvalidations: Flow<Unit> get() = emptyFlow()
     suspend fun captureMessageEditAccess(storedId: String, runtimeId: String): com.hermes.bot.data.turn.MessageEditAccess? = null
     suspend fun capturePickerAccess(runtimeSessionId: String): SessionPickerAccess? = null
+    /** Required for queued automatic intent; unsupported repositories fail closed. */
+    suspend fun capturePromptSubmissionAccess(storedId: String, runtimeId: String): com.hermes.bot.data.turn.PromptSubmissionAccess? = null
     suspend fun captureSendActivityOwner(storedSessionId: String, runtimeSessionId: String): SessionActivityOwner? = null
     suspend fun recordSendActivity(owner: SessionActivityOwner) {}
     suspend fun isCommandOwnerCurrent(owner: SessionActivityOwner): Boolean = false

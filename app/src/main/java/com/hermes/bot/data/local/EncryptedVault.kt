@@ -1235,63 +1235,96 @@ class EncryptedVault(
     // --- Session Summary Cache (V3: partitioned, origin/workspace/epoch bound) ---
 
     override suspend fun activeAccessPartition(): CacheAccessPartitionResult = mutex.withLock {
-        withContext(ioDispatcher) {
-            ensureMigrated()
-            val activeId = readProfileIndexInternal()?.activeProfileId
-                ?: return@withContext CacheAccessPartitionResult.Unavailable(
-                    CacheUnavailableReason.NO_ACTIVE_PROFILE
-                )
-            val profile = readConnectionProfileInternal(activeId)
-                ?: return@withContext CacheAccessPartitionResult.Unavailable(
-                    CacheUnavailableReason.PROFILE_ABSENT
-                )
-            if (localLoginFile(activeId).exists()) {
-                val epoch = localEpoch(activeId, profile.normalizedOrigin)
-                    ?: return@withContext CacheAccessPartitionResult.Unavailable(CacheUnavailableReason.CREDENTIAL_ABSENT)
-                return@withContext CacheAccessPartitionResult.Available(CacheAccessPartition(activeId,
-                    sha256Hex(profile.normalizedOrigin), epoch, workspaceTagFor(readSelectedContextProfileInternal())))
-            }
-            val credential = readAuthCredentialInternal(activeId)
-                ?: return@withContext CacheAccessPartitionResult.Unavailable(
-                    CacheUnavailableReason.CREDENTIAL_ABSENT
-                )
-            val credentialOrigin = CanonicalOrigin
-                .parse(credential.canonicalOrigin)
-                .getOrNull()
-                ?.originUrl
-            if (credentialOrigin == null || credentialOrigin != profile.normalizedOrigin) {
-                // SEC-02: a credential bound to a different origin can never gate
-                // offline reads for this profile's partition.
-                return@withContext CacheAccessPartitionResult.Unavailable(
-                    CacheUnavailableReason.CREDENTIAL_ORIGIN_MISMATCH
-                )
-            }
-            val stateFile = cacheAccessStateFileFor(activeId, profile.normalizedOrigin)
-            val stateExisted = stateFile.exists()
-            val state = readCacheAccessStateInternal(activeId, profile.normalizedOrigin)
-                ?: return@withContext CacheAccessPartitionResult.Unavailable(
-                    if (stateExisted) CacheUnavailableReason.CACHE_ACCESS_STATE_INVALID
-                    else CacheUnavailableReason.CACHE_ACCESS_STATE_ABSENT
-                )
-            if (accessDenied(activeId, profile.normalizedOrigin, state)) {
-                return@withContext CacheAccessPartitionResult.Unavailable(CacheUnavailableReason.CREDENTIAL_ABSENT)
-            }
-            if (state.originSha256 != sha256Hex(profile.normalizedOrigin)) {
-                return@withContext CacheAccessPartitionResult.Unavailable(
-                    CacheUnavailableReason.CACHE_ACCESS_STATE_INVALID
-                )
-            }
-            // REQ-04: the partition is scoped to the current workspace selection.
-            val selectedName = readSelectedContextProfileInternal()
-            val workspaceScopeTag = workspaceTagFor(selectedName)
-            CacheAccessPartitionResult.Available(
-                CacheAccessPartition(
-                    profileLocalId = activeId,
-                    originSha256 = state.originSha256,
-                    cacheEpoch = state.cacheEpoch,
-                    workspaceScopeTag = workspaceScopeTag
-                )
+        withContext(ioDispatcher) { resolveAccessPartitionInternal() }
+    }
+
+    private fun resolveAccessPartitionInternal(): CacheAccessPartitionResult {
+        ensureMigrated()
+        val activeId = readProfileIndexInternal()?.activeProfileId
+            ?: return CacheAccessPartitionResult.Unavailable(
+                CacheUnavailableReason.NO_ACTIVE_PROFILE
             )
+        val profile = readConnectionProfileInternal(activeId)
+            ?: return CacheAccessPartitionResult.Unavailable(
+                CacheUnavailableReason.PROFILE_ABSENT
+            )
+        if (localLoginFile(activeId).exists()) {
+            val epoch = localEpoch(activeId, profile.normalizedOrigin)
+                ?: return CacheAccessPartitionResult.Unavailable(CacheUnavailableReason.CREDENTIAL_ABSENT)
+            return CacheAccessPartitionResult.Available(CacheAccessPartition(activeId,
+                sha256Hex(profile.normalizedOrigin), epoch, workspaceTagFor(readSelectedContextProfileInternal())))
+        }
+        val credential = readAuthCredentialInternal(activeId)
+            ?: return CacheAccessPartitionResult.Unavailable(
+                CacheUnavailableReason.CREDENTIAL_ABSENT
+            )
+        val credentialOrigin = CanonicalOrigin
+            .parse(credential.canonicalOrigin)
+            .getOrNull()
+            ?.originUrl
+        if (credentialOrigin == null || credentialOrigin != profile.normalizedOrigin) {
+            // SEC-02: a credential bound to a different origin can never gate
+            // offline reads for this profile's partition.
+            return CacheAccessPartitionResult.Unavailable(
+                CacheUnavailableReason.CREDENTIAL_ORIGIN_MISMATCH
+            )
+        }
+        val stateFile = cacheAccessStateFileFor(activeId, profile.normalizedOrigin)
+        val stateExisted = stateFile.exists()
+        val state = readCacheAccessStateInternal(activeId, profile.normalizedOrigin)
+            ?: return CacheAccessPartitionResult.Unavailable(
+                if (stateExisted) CacheUnavailableReason.CACHE_ACCESS_STATE_INVALID
+                else CacheUnavailableReason.CACHE_ACCESS_STATE_ABSENT
+            )
+        if (accessDenied(activeId, profile.normalizedOrigin, state)) {
+            return CacheAccessPartitionResult.Unavailable(CacheUnavailableReason.CREDENTIAL_ABSENT)
+        }
+        if (state.originSha256 != sha256Hex(profile.normalizedOrigin)) {
+            return CacheAccessPartitionResult.Unavailable(
+                CacheUnavailableReason.CACHE_ACCESS_STATE_INVALID
+            )
+        }
+        // REQ-04: the partition is scoped to the current workspace selection.
+        val selectedName = readSelectedContextProfileInternal()
+        val workspaceScopeTag = workspaceTagFor(selectedName)
+        return CacheAccessPartitionResult.Available(
+            CacheAccessPartition(
+                profileLocalId = activeId,
+                originSha256 = state.originSha256,
+                cacheEpoch = state.cacheEpoch,
+                workspaceScopeTag = workspaceScopeTag
+            )
+        )
+    }
+
+    private fun queueIdentity(partition: CacheAccessPartition, storedId: String): String =
+        "${partition.profileLocalId}:${partition.originSha256}:${partition.cacheEpoch}:${partition.workspaceScopeTag}:$storedId"
+
+    override suspend fun readChatQueue(partition: CacheAccessPartition, storedId: String): String? = mutex.withLock {
+        withContext(ioDispatcher) {
+            check((resolveAccessPartitionInternal() as? CacheAccessPartitionResult.Available)?.partition == partition) { "Queue owner unavailable" }
+            val identity = queueIdentity(partition, storedId)
+            val file = File(draftsDir, "queue_${sha256Hex(identity)}.enc")
+            check(file.length() <= 2 * 1024 * 1024 + 4096) { "Queue record too large" }
+            if (!file.exists()) return@withContext null
+            val bytes = cipherEngine.decrypt(file.readBytes(), createAad("CHAT_QUEUE", 1, identity)).getOrThrow()
+            String(bytes, Charsets.UTF_8)
+        }
+    }
+
+    override suspend fun writeChatQueue(partition: CacheAccessPartition, storedId: String, json: String, expectedJson: String?): Boolean = mutex.withLock {
+        withContext(ioDispatcher) {
+            if ((resolveAccessPartitionInternal() as? CacheAccessPartitionResult.Available)?.partition != partition ||
+                storedId.isBlank() || json.toByteArray().size > 2 * 1024 * 1024) return@withContext false
+            val identity = queueIdentity(partition, storedId)
+            val file = File(draftsDir, "queue_${sha256Hex(identity)}.enc")
+            val aad = createAad("CHAT_QUEUE", 1, identity)
+            // Compare under the same lifecycle mutex: stale instances and reset residue cannot overwrite newer intent.
+            if (file.length() > 2 * 1024 * 1024 + 4096) return@withContext false
+            val currentJson = if (file.exists()) String(cipherEngine.decrypt(file.readBytes(), aad).getOrThrow(), Charsets.UTF_8) else null
+            if (currentJson != expectedJson) return@withContext false
+            writeEncryptedSingleton(file, json, aad)
+            true
         }
     }
 

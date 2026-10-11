@@ -354,6 +354,7 @@ class DefaultAppContainer(
             savedStateHandle = savedStateHandle,
             turnCoordinator = turnCoordinator,
             vaultStorage = vaultStorage,
+            chatQueueFactory = { id -> com.hermes.bot.data.queue.VaultChatQueueStore(vaultStorage, id) },
             initialTitle = initialTitle,
             pendingInterruptQueue = pendingInterruptQueue,
             conversationCacheRepository = conversationCacheRepository,
