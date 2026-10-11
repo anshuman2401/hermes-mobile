@@ -23,13 +23,16 @@ class HostUpdateViewModelTest {
         var check = update
         var startResult: HostUpdateResult<HostUpdateStart> = HostUpdateResult.Ready(HostUpdateStart(id))
         var statusValue = HostUpdateStatus(false, null, null)
+        var checkGate: CompletableDeferred<Unit>? = null
+        var statusFailure: HostUpdateFailure? = null
         var startCalls = 0
         var checks = 0
         override suspend fun capture() = HostUpdateResult.Ready(scope)
         override suspend fun isCurrent(scope: InsightsScope) = true
-        override suspend fun check(scope: InsightsScope): HostUpdateResult<HostUpdateCheck> { checks++; return HostUpdateResult.Ready(check) }
+        override suspend fun check(scope: InsightsScope): HostUpdateResult<HostUpdateCheck> { checks++; checkGate?.await(); return HostUpdateResult.Ready(check) }
         override suspend fun start(scope: InsightsScope): HostUpdateResult<HostUpdateStart> { startCalls++; return startResult }
-        override suspend fun status(scope: InsightsScope) = HostUpdateResult.Ready(statusValue)
+        override suspend fun status(scope: InsightsScope): HostUpdateResult<HostUpdateStatus> =
+            statusFailure?.let { HostUpdateResult.Failed(it) } ?: HostUpdateResult.Ready(statusValue)
     }
 
     @Test fun checkAndConfirmationGateExactlyOneStart() {
@@ -107,6 +110,79 @@ class HostUpdateViewModelTest {
         vm.open(); vm.requestUpdate(); vm.confirmUpdate()
         assertFalse(vm.state.value.canStart)
         assertEquals(0, repo.startCalls)
+        vm.leave()
+    }
+
+    @Test fun unavailableTrackingStillShowsVersionButCannotStartAndRefreshRecovers() {
+        for (failure in listOf(HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)) {
+            val repo = Repository().apply { statusFailure = failure }
+            val vm = HostUpdateViewModel(repo)
+            vm.open()
+            assertEquals(update, vm.state.value.check)
+            assertEquals(HostUpdateFailure.STATUS_UNAVAILABLE, vm.state.value.failure)
+            assertFalse(vm.state.value.canStart)
+            vm.requestUpdate(); vm.confirmUpdate()
+            assertEquals(0, repo.startCalls)
+            repo.statusFailure = null
+            vm.refresh()
+            assertTrue(vm.state.value.canStart)
+            assertNull(vm.state.value.failure)
+            repo.statusFailure = failure
+            vm.requestUpdate()
+            vm.refresh()
+            assertFalse(vm.state.value.confirmationOpen)
+            assertFalse(vm.state.value.canStart)
+            assertEquals(update, vm.state.value.check)
+            vm.leave()
+        }
+    }
+
+    @Test fun secondaryReadOwnsLoadingAndLeavingCancelsItsPresentation() = runBlocking {
+        val waiting = CompletableDeferred<Unit>()
+        val repo = Repository().apply { statusFailure = HostUpdateFailure.MALFORMED; checkGate = waiting }
+        val vm = HostUpdateViewModel(repo)
+        vm.open()
+        assertTrue(vm.state.value.loading)
+        assertFalse(vm.state.value.canStart)
+        vm.refresh()
+        assertEquals(1, repo.checks)
+        vm.leave()
+        waiting.complete(Unit)
+        assertEquals(HostUpdateUiState(), vm.state.value)
+    }
+
+    @Test fun authorityFailureDoesNotFetchVersionOrRetainUpdatePermission() {
+        for (failure in listOf(HostUpdateFailure.AUTH, HostUpdateFailure.ORIGIN, HostUpdateFailure.STALE)) {
+            val repo = Repository().apply { statusFailure = failure }
+            val vm = HostUpdateViewModel(repo)
+            vm.open()
+            assertEquals(0, repo.checks)
+            assertEquals(failure, vm.state.value.failure)
+            assertNull(vm.state.value.check)
+            repo.statusFailure = null
+            vm.refresh()
+            assertTrue(vm.state.value.canStart)
+            val checks = repo.checks
+            repo.statusFailure = failure
+            vm.refresh()
+            assertEquals(checks, repo.checks)
+            assertNull(vm.state.value.check)
+            assertFalse(vm.state.value.canStart)
+            vm.leave()
+        }
+    }
+
+    @Test fun interruptedMatchingActionNeverClaimsSuccessOrResends() = runBlocking {
+        val repo = Repository()
+        val waiting = CompletableDeferred<Unit>()
+        val vm = HostUpdateViewModel(repo, waitForPoll = { waiting.await() })
+        vm.open(); vm.requestUpdate(); vm.confirmUpdate()
+        repo.statusValue = HostUpdateStatus(false, id, "interrupted")
+        waiting.complete(Unit)
+        assertEquals(HostUpdatePhase.FAILED, vm.state.value.phase)
+        assertEquals(HostUpdateFailure.INTERRUPTED, vm.state.value.failure)
+        assertFalse(vm.state.value.canStart)
+        assertEquals(1, repo.startCalls)
         vm.leave()
     }
 

@@ -3,12 +3,14 @@ package com.hermes.bot.data.update
 /** Fixed, non-secret presentation categories. No raw host error text is retained. */
 enum class HostUpdateFailure(val message: String) {
     UNAVAILABLE("Could not reach Hermes. Check the connection and try again."),
+    STATUS_UNAVAILABLE("Update status is unavailable. Update controls are disabled; check again later."),
     AUTH("Sign in again to check host updates."),
     UNSUPPORTED("This host does not support update controls."),
     MALFORMED("Hermes returned an unsupported update response."),
     STALE("The connection changed. Reopen Updates to check again."),
     ORIGIN("Update request rejected by the exact-origin policy."),
     NOT_ELIGIBLE("This host cannot apply an update from the app."),
+    INTERRUPTED("The host update was interrupted. Check again before trying another update."),
     REFUSED("Hermes declined to start the update."),
     UNKNOWN("The update result is unknown. Check the host before trying again.")
 }
