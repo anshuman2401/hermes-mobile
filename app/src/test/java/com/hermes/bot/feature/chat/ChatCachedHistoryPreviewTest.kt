@@ -37,6 +37,117 @@ class ChatCachedHistoryPreviewTest {
         withTimeout(5000) { block() }
     }
 
+    @Test fun defaultSelectionSavesHistoryAndPreviewsItOnReopenWhileHostWaits() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize()
+            f.vault.clearSelectedContextProfile()
+            val first = f.vm()
+            f.awaitLoaded(first)
+            assertTrue(f.cache.load("synthetic-session") is ConversationCacheReadResult.Snapshot)
+            f.clearVMs()
+            val resume = CompletableDeferred<String>()
+            f.transport.setRpcHandler("session.resume") { id, _ -> resume.complete(id) }
+            val reopened = f.vm()
+            try {
+                await { resume.await(); reopened.uiState.first { it.isCachedHistoryPreview } }
+                assertEquals("Synthetic compact answer", reopened.uiState.value.timeline.filterIsInstance<AssistantMessage>().single().text)
+                assertFalse(reopened.uiState.value.showInitialLoading)
+                assertFalse(reopened.uiState.value.showSavedSnapshot)
+                assertNull(ChatRestoreNoticePolicy.forState(reopened.uiState.value))
+                assertNull(reopened.uiState.value.runtimeSessionId)
+                assertFalse(reopened.uiState.value.isComposerReady)
+                assertEquals(0, f.gets)
+                f.transport.respondSuccess(resume.await(), f.resumeBody())
+                f.awaitLoaded(reopened)
+                assertFalse(reopened.uiState.value.isCachedHistoryPreview)
+                assertEquals("synthetic-runtime", reopened.uiState.value.runtimeSessionId)
+            } finally { f.clearVMs() }
+        }
+    }
+
+    @Test fun defaultSelectionRejectsLateCacheAfterWorkspaceLoginOrOwnerDisposal() = runBlocking(main.testDispatcher) {
+        for (mutation in listOf("workspace", "login", "dispose")) {
+            StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+                f.initialize(); f.vault.clearSelectedContextProfile(); seed(f)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val checked = CompletableDeferred<Unit>()
+                val base = delayedCache(f, entered, release)
+                val cache = object : ConversationCacheRepository by base {
+                    override suspend fun isReadOwnerCurrent(owner: com.hermes.bot.data.local.WorkspaceRecoveryOwner): Boolean {
+                        val current = f.cache.isReadOwnerCurrent(owner)
+                        checked.complete(Unit)
+                        return current
+                    }
+                }
+                val resume = CompletableDeferred<String>()
+                f.transport.setRpcHandler("session.resume") { id, _ -> resume.complete(id) }
+                val vm = f.vm(cacheRepository = cache)
+                try {
+                    await { entered.await(); resume.await() }
+                    when (mutation) {
+                        "workspace" -> f.vault.saveSelectedContextProfile("synthetic-other")
+                        "login" -> f.vault.saveAuthCredential(f.credential("synthetic-new-login"))
+                        else -> f.clearVMs()
+                    }
+                    release.complete(Unit)
+                    if (mutation == "dispose") f.awaitHistoryRead(vm) else await { checked.await() }
+                    assertTrue(vm.uiState.value.timeline.isEmpty())
+                    assertFalse(vm.uiState.value.isCachedHistoryPreview)
+                    assertNull(vm.uiState.value.savedSnapshotCapturedAtMillis)
+                } finally { release.complete(Unit); f.clearVMs() }
+            }
+        }
+    }
+
+    @Test fun defaultSelectionSlowCacheCannotReplaceHostHistoryOrDelayAttachment() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize(); f.vault.clearSelectedContextProfile(); seed(f)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val resume = CompletableDeferred<String>()
+            f.transport.setRpcHandler("session.resume") { id, _ -> resume.complete(id) }
+            val vm = f.vm(cacheRepository = delayedCache(f, entered, release))
+            try {
+                await { entered.await(); resume.await() }
+                f.transport.respondSuccess(resume.await(), f.resumeBody())
+                await { vm.uiState.first { it.runtimeSessionId == "synthetic-runtime" } }
+                val before = vm.uiState.value.timeline
+                release.complete(Unit)
+                f.awaitLoaded(vm)
+                assertEquals(before, vm.uiState.value.timeline)
+                assertFalse(vm.uiState.value.isCachedHistoryPreview)
+                assertNull(vm.uiState.value.savedSnapshotCapturedAtMillis)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test fun unreadableSelectionMustNotBecomeDefaultCachePreview() = runBlocking(main.testDispatcher) {
+        val folder = temp.newFolder()
+        StoredChatFixture(folder, main.testDispatcher).use { f ->
+            f.initialize(); f.vault.clearSelectedContextProfile(); seed(f)
+            java.io.File(folder, "context_profile_selection.enc").writeText("Synthetic damaged selection")
+            val attempted = CompletableDeferred<Unit>()
+            val cache = object : ConversationCacheRepository by f.cache {
+                override suspend fun captureReadOwner(): com.hermes.bot.data.local.WorkspaceRecoveryOwner? {
+                    val captured = f.cache.captureReadOwner()
+                    assertNull(captured)
+                    attempted.complete(Unit)
+                    return captured
+                }
+            }
+            val resume = CompletableDeferred<String>()
+            f.transport.setRpcHandler("session.resume") { id, _ -> resume.complete(id) }
+            val vm = f.vm(cacheRepository = cache)
+            await { attempted.await(); resume.await() }
+            assertTrue(vm.uiState.value.timeline.isEmpty())
+            assertFalse(vm.uiState.value.isCachedHistoryPreview)
+            f.transport.respondSuccess(resume.await(), f.resumeBody())
+            f.awaitLoaded(vm)
+            assertEquals("synthetic-runtime", vm.uiState.value.runtimeSessionId)
+        }
+    }
+
     @Test fun showsCachedMessagesWhileBothHostReadsWaitThenReplacesWithoutMerging() = runBlocking(main.testDispatcher) {
         StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
             f.initialize(); seed(f)

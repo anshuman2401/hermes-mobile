@@ -19,14 +19,29 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.hermes.bot.data.queue.*
 
+internal enum class QueueControl { NONE, PAUSE, RESUME, REVIEW }
+
+/** Restored waiting intent stays inline; only failure or uncertain outcomes need review. */
+internal fun queueControl(state: ChatQueueState, isStreaming: Boolean): QueueControl {
+    if (!state.visible || state.edit != null) return QueueControl.NONE
+    if (state.error != null ||
+        state.active?.state in setOf(QueueItemState.FAILED, QueueItemState.UNKNOWN, QueueItemState.CONFIRMING) ||
+        state.pause in setOf(QueuePause.STORAGE, QueuePause.FAILED, QueuePause.UNKNOWN, QueuePause.CONFIRMATION)) {
+        return QueueControl.REVIEW
+    }
+    if (state.pause != null && state.pause != QueuePause.EDITING) return QueueControl.RESUME
+    return if (!isStreaming && state.pause == null) QueueControl.PAUSE else QueueControl.NONE
+}
+
 @Composable
 fun ChatQueuePresentation(state: ChatQueueState, isStreaming: Boolean, maxHeight: Dp,
     onPause: () -> Unit, onResume: () -> Unit, onCancel: (String) -> Unit, onEdit: (String) -> Unit,
     onEditText: (String) -> Unit, onFinishEdit: (Boolean) -> Unit, onCheck: () -> Unit,
     onDismiss: () -> Unit, onRetry: () -> Unit) {
     var reviewing by remember { mutableStateOf(false) }
-    LaunchedEffect(state.visible, isStreaming) { if (!state.visible || isStreaming) reviewing = false }
-    if (isStreaming && state.waiting.isNotEmpty()) {
+    val control = queueControl(state, isStreaming)
+    LaunchedEffect(control) { if (control != QueueControl.REVIEW) reviewing = false }
+    if (state.waiting.isNotEmpty()) {
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight.coerceAtLeast(64.dp))
             .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)
             .testTag("queued-prompt-pills"), horizontalAlignment = Alignment.End,
@@ -56,14 +71,15 @@ fun ChatQueuePresentation(state: ChatQueueState, isStreaming: Boolean, maxHeight
             }
         }
     }
-    // Held intent and uncertain writes still need explicit recovery; normal streaming
-    // exposes only waiting pills, never the active turn or a queue status panel.
-    val needsReview = state.visible && (!isStreaming || state.error != null ||
-        state.pause != null && state.pause != QueuePause.EDITING)
-    if (needsReview) {
-        TextButton(onClick = { reviewing = true }) { Text("Review queued messages") }
+    // Resume remains an explicit intent. Its ViewModel verifies authoritative idle
+    // evidence; showing waiting pills never releases restored or uncertain writes.
+    when (control) {
+        QueueControl.RESUME -> TextButton(onClick = onResume) { Text("Resume queue") }
+        QueueControl.PAUSE -> TextButton(onClick = onPause) { Text("Pause queue") }
+        QueueControl.REVIEW -> TextButton(onClick = { reviewing = true }) { Text("Review queued messages") }
+        QueueControl.NONE -> Unit
     }
-    if (reviewing && state.visible) AlertDialog(onDismissRequest = { reviewing = false },
+    if (reviewing && control == QueueControl.REVIEW) AlertDialog(onDismissRequest = { reviewing = false },
         confirmButton = { TextButton(onClick = { reviewing = false }) { Text("Close") } },
         text = { ChatQueuePanel(state, maxHeight, onPause, onResume, onCancel, onEdit, onEditText,
             onFinishEdit, onCheck, onDismiss, onRetry) })
