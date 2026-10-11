@@ -28,7 +28,7 @@ When running Gradle or the verifier, use the [shared lock procedure](specs/testi
 
 For a documentation-only change, review the text and links and run `git diff --check`; the full verifier is unnecessary unless specifically requested. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.
 
-This repository has no GitHub Actions verification workflow. Run `./scripts/verify.sh` locally for executable changes and include the results in the PR as described in [CONTRIBUTING.md](CONTRIBUTING.md).
+GitHub Actions verification is [manual-only](.github/workflows/verify.yml); pushes and pull requests do not start hosted runs. Run `./scripts/verify.sh` locally for executable changes and include the results in the PR as described in [CONTRIBUTING.md](CONTRIBUTING.md). A maintainer can request a hosted run using the [manual workflow procedure](specs/testing/verification.md#manual-github-actions-verification).
 
 ## App identity and versioning
 

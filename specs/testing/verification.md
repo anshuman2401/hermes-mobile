@@ -1,6 +1,18 @@
 # Android verification runbook
 
-`./scripts/verify.sh` is the canonical repository verification entry point. Run it locally; this repository has no GitHub Actions verification workflow.
+`./scripts/verify.sh` is the canonical repository verification entry point. Run it locally for executable changes. The [GitHub Actions workflow](../../.github/workflows/verify.yml) invokes the same verifier only when manually dispatched.
+
+## Manual GitHub Actions verification
+
+The `Manual verification` workflow uses only `workflow_dispatch`. Pushes, pull requests, and schedules do not start it. Local verification receipts remain required; a PR without a hosted check is not evidence of a hosted pass. The workflow must be present on the default branch before GitHub exposes manual dispatch. Adding it on a feature branch alone does not make it runnable.
+
+After the workflow is merged and the maintainer authorizes the run, open **Actions → Manual verification → Run workflow**, select the intended branch, and start one run. Check the run's selected commit before treating its result as evidence for a candidate. Private-repository runs consume the owner's Actions allowance; manual triggering is not a billing exemption. Do not dispatch a run merely to check whether quota is available.
+
+The job uses a standard Ubuntu 24.04 hosted runner, JDK 21, Android SDK Platform 37 and Build Tools 36.0.0. SDK provisioning is explicit CI setup before the verifier; the local verifier still expects an installed SDK. Actions are pinned to commit hashes, the token has read-only contents permission, and checkout does not persist credentials. Gradle wrapper validation is enabled. Gradle caching writes only from `main`; other selected branches may restore caches but do not update them. A newer manual run of the same branch cancels the previous run; the job has a 40-minute timeout.
+
+The workflow runs policy checks, JVM tests, lint and debug APK assembly under the shared Gradle lock. It uses synthetic test fixtures and no private host or release-signing credentials. Generated JUnit and lint reports are uploaded when available after success or failure, with seven-day retention. APKs, signing files and whole build directories are not uploaded. Missing reports after an early failure do not imply success. Device/emulator checks, live-host checks, release packaging and publication are outside this workflow.
+
+A successful local verifier or workflow lint check does not prove hosted runner setup, dependency downloads, quota availability or artifact upload. Record the first hosted run separately, including its commit, outcome and test/lint summaries. Until it executes, hosted verification remains `NOT RUN`.
 
 ## Evidence tiers
 
@@ -20,7 +32,7 @@ Device/emulator testing is allowed. This supersedes the former 2026-09-18 prohib
 - Run from any location inside a Git checkout; the script resolves the repository root itself.
 - Use JDK 21 and an already-installed Android SDK compatible with this project.
 - Set `ANDROID_HOME`/`ANDROID_SDK_ROOT` when the environment does not already expose the SDK.
-- Do not install SDK components, create keystores, authenticate, or contact a live/private Hermes host as part of this runbook.
+- For local verification, use the installed SDK; do not install SDK components as part of the verifier run. The manual hosted workflow provisions its disposable runner separately, as described above. Do not create release keystores, authenticate to a Hermes host, or contact a live/private Hermes host during verification.
 - Keep real credentials, cookies, tickets, host/IP values, owner content, and private filesystem paths out of command output and retained evidence.
 
 ## Documentation-only changes
