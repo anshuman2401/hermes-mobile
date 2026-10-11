@@ -115,8 +115,20 @@ interface VaultStorage : CacheLifecycleStore {
     fun invalidateLoginOwners() {}
     suspend fun captureLoginOwner(origin: String): LoginOwner? = null
     suspend fun readRememberedLogin(owner: LoginOwner): RememberedLogin? = null
+    suspend fun readRememberedLogin(owner: LoginOwner, explicitConnect: Boolean): RememberedLogin? =
+        readRememberedLogin(owner)
+    suspend fun rememberedEndpoint(host: String? = null): com.hermes.bot.data.origin.CanonicalOrigin? = null
+    suspend fun rememberLoginPreference(origin: String): Boolean = true
+    suspend fun hasRememberedLogin(origin: String): Boolean = false
+    suspend fun hasAutomaticLogin(origin: String): Boolean = false
+    suspend fun forgetRememberedLogin(origin: String) {}
+    suspend fun noteSuccessfulEndpoint(origin: String) {}
+    suspend fun selectConnectionForEndpoint(origin: String): Boolean = false
     suspend fun commitRememberedLogin(owner: LoginOwner, credential: AuthCredential,
         username: String, password: CharArray): Boolean = false
+    suspend fun commitRememberedLogin(owner: LoginOwner, credential: AuthCredential,
+        username: String, password: CharArray, remember: Boolean): Boolean =
+        if (remember) commitRememberedLogin(owner, credential, username, password) else false
     suspend fun rejectRememberedLogin(owner: LoginOwner) {}
     suspend fun prepareLocalLogin(origin: String): Boolean = false
 

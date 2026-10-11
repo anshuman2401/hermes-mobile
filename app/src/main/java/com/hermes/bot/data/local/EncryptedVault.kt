@@ -141,6 +141,96 @@ class EncryptedVault(
             it.allowed && it.origin == origin && it.epoch.isNotEmpty()
         }?.epoch
     }
+    private val endpointLogins = EndpointLoginStore(storageDir, cipherEngine) { file, json, aad ->
+        writeEncryptedSingleton(file, json, aad)
+        directorySync(storageDir)
+    }
+
+    /** Destination-first migration; existing endpoint records (including tombstones) always win. */
+    private fun migrateEndpointLogins() {
+        ensureMigrated()
+        val index = readProfileIndexInternal()
+        val ids = (index?.profileIds.orEmpty() + "default").distinct()
+        val profiles = ids.associateWith { readConnectionProfileInternal(it) }
+        val legacy = ids.mapNotNull { id -> readLocalLogin(id)?.let { id to it } }
+        legacy.groupBy { CanonicalOrigin.parse(it.second.origin).getOrNull()?.let { origin ->
+            if (origin.pathPrefix.isEmpty()) origin.copy(rawPort = origin.port).originUrl else null
+        } }.forEach { (origin, records) ->
+            if (records.none { it.second.password != null }) return@forEach
+            if (origin != null && endpointLogins.get(origin) == null) {
+                val winner = records.sortedWith(compareByDescending<Pair<String, LocalLogin>> {
+                    profiles[it.first]?.updatedAt ?: 0L
+                }.thenBy { it.first }).first()
+                val (id, login) = winner
+                if (login.password != null) {
+                    val eligible = localEpoch(id, login.origin) != null
+                    endpointLogins.put(EndpointLoginStore.Entry(origin,
+                        if (eligible) login.username else null, if (eligible) login.provider else null,
+                        if (eligible) login.password else null, automatic = eligible))
+                }
+            }
+            records.forEach { (id, login) ->
+                if (login.password != null) writeLocalLogin(id,
+                    LocalLogin(login.origin, login.epoch, login.username, login.provider, null, login.allowed))
+            }
+        }
+    }
+
+    override suspend fun rememberedEndpoint(host: String?): CanonicalOrigin? = mutex.withLock {
+        withContext(ioDispatcher) { migrateEndpointLogins(); endpointLogins.latest(host) }
+    }
+    override suspend fun rememberLoginPreference(origin: String): Boolean = mutex.withLock {
+        withContext(ioDispatcher) { migrateEndpointLogins(); endpointLogins.get(origin)?.remember ?: true }
+    }
+    override suspend fun hasRememberedLogin(origin: String): Boolean = mutex.withLock {
+        withContext(ioDispatcher) {
+            migrateEndpointLogins()
+            endpointLogins.get(origin)?.let { it.remember && it.password != null && it.username != null && it.provider != null } == true
+        }
+    }
+    override suspend fun hasAutomaticLogin(origin: String): Boolean = mutex.withLock {
+        withContext(ioDispatcher) {
+            migrateEndpointLogins()
+            val id = activeAuthProfileInternal() ?: return@withContext false
+            if (automaticLoginDenied(id, origin)) return@withContext false
+            endpointLogins.get(origin)?.let { it.automatic && it.remember && it.password != null &&
+                it.username != null && it.provider != null } == true
+        }
+    }
+    override suspend fun forgetRememberedLogin(origin: String) {
+        invalidatePreviewAuthority()
+        loginGeneration.incrementAndGet()
+        mutex.withLock {
+            withContext(ioDispatcher) { migrateEndpointLogins(); endpointLogins.forget(origin) }
+        }
+    }
+    override suspend fun noteSuccessfulEndpoint(origin: String) = mutex.withLock {
+        withContext(ioDispatcher) { migrateEndpointLogins(); endpointLogins.noteSuccess(origin) }
+    }
+    override suspend fun selectConnectionForEndpoint(origin: String): Boolean = mutex.withLock {
+        withContext(ioDispatcher) {
+            ensureMigrated()
+            val parsed = CanonicalOrigin.parseOrThrow(origin)
+            val index = readProfileIndexInternal() ?: return@withContext false
+            val matches = index.profileIds.mapNotNull { readConnectionProfileInternal(it) }.filter {
+                CanonicalOrigin.parse(it.normalizedOrigin).getOrNull()?.isSameOrigin(parsed) == true
+            }
+            val selected = matches.firstOrNull { it.localId == index.activeProfileId }
+                ?: matches.sortedWith(compareByDescending<ConnectionProfile> { it.updatedAt }.thenBy { it.localId }).firstOrNull()
+                ?: return@withContext false
+            if (selected.localId != index.activeProfileId) {
+                invalidatePreviewAuthority()
+                loginGeneration.incrementAndGet()
+                writeProfileIndexInternal(index.copy(activeProfileId = selected.localId, updatedAt = System.currentTimeMillis()))
+            }
+            true
+        }
+    }
+
+    // A durable sign-out rotation denies automatic use even if the subsequent endpoint write failed.
+    private fun automaticLoginDenied(id: String, origin: String): Boolean =
+        readCacheAccessStateInternal(id, origin)?.rotationReason == CacheEpochRotationReason.SIGNED_OUT.raw
+
     private fun loginOwnerCurrent(owner: LoginOwner): Boolean =
         loginGeneration.get() == owner.generation && activeAuthProfileInternal() == owner.profileId &&
             readCacheAccessStateInternal(owner.profileId, owner.origin)?.cacheEpoch == owner.authEpoch
@@ -154,30 +244,41 @@ class EncryptedVault(
             LoginOwner(id, origin, loginGeneration.get(), readCacheAccessStateInternal(id, origin)?.cacheEpoch)
         }
     }
-    override suspend fun readRememberedLogin(owner: LoginOwner): RememberedLogin? = mutex.withLock {
+    override suspend fun readRememberedLogin(owner: LoginOwner): RememberedLogin? =
+        readRememberedLogin(owner, explicitConnect = false)
+
+    override suspend fun readRememberedLogin(owner: LoginOwner, explicitConnect: Boolean): RememberedLogin? = mutex.withLock {
         withContext(ioDispatcher) {
             if (!loginOwnerCurrent(owner)) return@withContext null
-            val login = readLocalLogin(owner.profileId) ?: return@withContext null
-            if (localEpoch(owner.profileId, owner.origin) == null || !login.allowed ||
-                login.origin != owner.origin || login.password == null ||
-                login.username == null || login.provider == null) return@withContext null
+            migrateEndpointLogins()
+            val login = endpointLogins.get(owner.origin) ?: return@withContext null
+            val profile = readConnectionProfileInternal(owner.profileId)
+            if (owner.profileId != "default" && (profile == null ||
+                CanonicalOrigin.parse(profile.normalizedOrigin).getOrNull()?.isSameOrigin(CanonicalOrigin.parseOrThrow(owner.origin)) != true))
+                return@withContext null
+            if ((!explicitConnect && (!login.automatic || automaticLoginDenied(owner.profileId, owner.origin))) ||
+                !login.remember || login.password == null || login.username == null || login.provider == null)
+                return@withContext null
             RememberedLogin(login.username, login.password.toCharArray(), login.provider)
         }
     }
     override suspend fun rejectRememberedLogin(owner: LoginOwner) = mutex.withLock {
         withContext(ioDispatcher) {
-            if (loginOwnerCurrent(owner)) readLocalLogin(owner.profileId)?.let {
-                writeLocalLogin(owner.profileId, LocalLogin(it.origin, it.epoch, it.username, it.provider, null, it.allowed))
-            }
+            if (loginOwnerCurrent(owner)) { migrateEndpointLogins(); endpointLogins.reject(owner.origin) }
         }
         Unit
     }
     override suspend fun commitRememberedLogin(owner: LoginOwner, credential: AuthCredential,
-        username: String, password: CharArray): Boolean = mutex.withLock {
+        username: String, password: CharArray): Boolean =
+        commitRememberedLogin(owner, credential, username, password, remember = true)
+
+    override suspend fun commitRememberedLogin(owner: LoginOwner, credential: AuthCredential,
+        username: String, password: CharArray, remember: Boolean): Boolean = mutex.withLock {
         invalidatePreviewAuthority()
         withContext(ioDispatcher) {
             if (!loginOwnerCurrent(owner) || credential.canonicalOrigin != owner.origin) return@withContext false
             require(username.length <= 4096 && password.size <= 4096)
+            migrateEndpointLogins()
             val old = readLocalLogin(owner.profileId)
             val retained = old?.takeIf { localEpoch(owner.profileId, owner.origin) == it.epoch &&
                 it.allowed && it.origin == owner.origin &&
@@ -187,10 +288,14 @@ class EncryptedVault(
             try {
                 saveAuthCredentialLocked(owner.profileId, credential, completePublication = false)
                 val epoch = retained ?: readCacheAccessStateInternal(owner.profileId, owner.origin)!!.cacheEpoch
+                endpointLogins.put(EndpointLoginStore.Entry(owner.origin,
+                    if (remember) username else null, if (remember) credential.providerId else null,
+                    if (remember) String(password) else null, remember = remember))
                 writeLocalLogin(owner.profileId, LocalLogin(owner.origin, epoch, username,
-                    credential.providerId, String(password), true))
+                    credential.providerId, null, true))
                 if (loginGeneration.get() != owner.generation) {
                     revokeLocalLogin(owner.profileId, owner.origin)
+                    endpointLogins.suppress(owner.origin)
                     writeCacheAccessStateInternal(owner.profileId, CacheEpochRotationReason.SIGNED_OUT, originOverride = owner.origin)
                     return@withContext false
                 }
@@ -332,7 +437,8 @@ class EncryptedVault(
 
     private fun writeEncryptedSingleton(file: File, jsonString: String, aad: ByteArray) {
         val plaintextBytes = jsonString.toByteArray(Charsets.UTF_8)
-        val ciphertext = cipherEngine.encrypt(plaintextBytes, aad)
+        val ciphertext = try { cipherEngine.encrypt(plaintextBytes, aad) }
+            finally { plaintextBytes.fill(0) }
         writeAtomicDurable(file, ciphertext)
     }
 
@@ -704,6 +810,20 @@ class EncryptedVault(
         }
     }
 
+    private fun removeUnreferencedEndpoint(id: String, origin: String) {
+        val parsed = CanonicalOrigin.parse(origin).getOrNull() ?: return
+        if (parsed.pathPrefix.isNotEmpty()) return
+        val referenced = readProfileIndexInternal()?.profileIds.orEmpty().filter { it != id }.any {
+            readConnectionProfileInternal(it)?.normalizedOrigin?.let { other ->
+                CanonicalOrigin.parse(other).getOrNull()?.isSameOrigin(parsed)
+            } == true
+        }
+        if (!referenced) {
+            migrateEndpointLogins()
+            endpointLogins.remove(origin)
+        }
+    }
+
     override suspend fun deleteConnectionProfile(localId: String): Boolean = mutex.withLock {
         invalidatePreviewAuthority()
         withContext(ioDispatcher) {
@@ -720,6 +840,7 @@ class EncryptedVault(
             // before any purge; the deleting branch destroys the partition first.
             readConnectionProfileInternal(localId)?.let { profile ->
                 purgeOriginSubtreeLocked(profile.localId, profile.normalizedOrigin)
+                removeUnreferencedEndpoint(profile.localId, profile.normalizedOrigin)
             }
             revokeLocalLogin(localId, readConnectionProfileInternal(localId)?.normalizedOrigin.orEmpty())
             getProfileFile(localId).delete()
@@ -745,6 +866,7 @@ class EncryptedVault(
             // PR-1 REQ-07: purge-before-mutation for the profile clear.
             readConnectionProfileInternal(targetId)?.let { profile ->
                 purgeOriginSubtreeLocked(profile.localId, profile.normalizedOrigin)
+                removeUnreferencedEndpoint(profile.localId, profile.normalizedOrigin)
             }
             revokeLocalLogin(targetId, readConnectionProfileInternal(targetId)?.normalizedOrigin.orEmpty())
             getProfileFile(targetId).delete()
@@ -1152,6 +1274,8 @@ class EncryptedVault(
                 ?: index?.activeProfileId
                 ?: if (index?.profileIds.isNullOrEmpty() && getCredentialFile("default").exists()) "default" else null
                 ?: return@withContext
+            if (reason == CacheEpochRotationReason.SIGNED_OUT || reason == CacheEpochRotationReason.ORIGIN_REPLACED)
+                migrateEndpointLogins()
             // PR-1 REQ-06: rotate (signed out) BEFORE clearing the credential so
             // the superseded partition stops serving. Only an existing rotation
             // record is rotated — sign-out never mints a usable one (SEC-01).
@@ -1160,6 +1284,12 @@ class EncryptedVault(
                 reason,
                 rotateOnlyIfStateExists = true
             )
+            if (reason == CacheEpochRotationReason.SIGNED_OUT) {
+                val origin = readConnectionProfileInternal(targetId)?.normalizedOrigin
+                    ?: readAuthCredentialInternal(targetId, true)?.canonicalOrigin
+                if (origin != null && CanonicalOrigin.parse(origin).getOrNull()?.pathPrefix?.isEmpty() == true)
+                    endpointLogins.suppress(origin)
+            }
             if (reason != CacheEpochRotationReason.AUTH_EXPIRED) revokeLocalLogin(targetId,
                 readConnectionProfileInternal(targetId)?.normalizedOrigin ?: readAuthCredentialInternal(targetId, true)?.canonicalOrigin.orEmpty())
             getCredentialFile(targetId).delete()
@@ -4086,6 +4216,7 @@ class EncryptedVault(
         withContext(ioDispatcher) {
             try {
                 loginGeneration.incrementAndGet()
+                endpointLogins.clear()
                 storageDir.listFiles { _, name -> name.startsWith("local_login_") }?.forEach { check(it.delete()) }
                 legacyConnectionFile.delete()
                 legacyAuthFile.delete()

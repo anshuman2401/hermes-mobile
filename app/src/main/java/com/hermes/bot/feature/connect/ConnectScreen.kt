@@ -1,5 +1,7 @@
 package com.hermes.bot.feature.connect
 
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +34,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -93,7 +96,8 @@ fun ConnectScreen(
     onOpenSessions: () -> Unit,
     onRetry: () -> Unit,
     onToggleDiagnostics: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onRememberLoginChanged: (Boolean) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
 
@@ -204,6 +208,7 @@ fun ConnectScreen(
                     uiState = uiState,
                     onUsernameChanged = onUsernameChanged,
                     onPasswordChanged = onPasswordChanged,
+                    onRememberLoginChanged = onRememberLoginChanged,
                     onLogin = onLogin
                 )
             }
@@ -593,6 +598,7 @@ private fun LoginFormCard(
     uiState: ConnectUiState,
     onUsernameChanged: (String) -> Unit,
     onPasswordChanged: (String) -> Unit,
+    onRememberLoginChanged: (Boolean) -> Unit,
     onLogin: () -> Unit
 ) {
     var passwordVisible by remember { mutableStateOf(false) }
@@ -683,6 +689,16 @@ private fun LoginFormCard(
                         contentDescription = "Password field"
                     }
             )
+
+            Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).toggleable(
+                value = uiState.rememberLogin, enabled = !uiState.loginLoading,
+                role = Role.Checkbox, onValueChange = onRememberLoginChanged),
+                verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = uiState.rememberLogin, onCheckedChange = null, enabled = !uiState.loginLoading)
+                Text("Remember me on this device", style = MaterialTheme.typography.bodyMedium)
+            }
+            Text("Saved logins are encrypted on this device. Uncheck to forget this host’s saved login after signing in.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             // Login error display
             if (uiState.loginError != null) {

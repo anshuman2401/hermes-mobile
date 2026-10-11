@@ -35,7 +35,7 @@ object SignOutCacheChoicePolicy {
     fun title(): String = "Sign out"
 
     fun message(): String =
-        "Sign out of this connection? Choose what to do with this device's saved offline cache."
+        "Sign out of this connection? Remembered credentials stay encrypted on this device. Automatic login pauses until you connect again. Choose what to do with this device's saved offline cache."
 
     /** REQ-03: exact option label (plan literal). */
     fun keepLabel(): String = "Keep saved cache on this device"

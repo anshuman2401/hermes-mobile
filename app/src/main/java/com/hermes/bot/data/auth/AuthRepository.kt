@@ -57,6 +57,16 @@ interface AuthRepository {
     val sessionRejections: kotlinx.coroutines.flow.Flow<Unit> get() = kotlinx.coroutines.flow.emptyFlow()
     suspend fun prepareLocalLogin(origin: CanonicalOrigin): Boolean = false
     suspend fun recoverSession(origin: CanonicalOrigin): Result<Unit> = Result.failure(AuthSessionRejectedException())
+    suspend fun recoverSession(origin: CanonicalOrigin, explicitConnect: Boolean): Result<Unit> = recoverSession(origin)
+    suspend fun rememberedEndpoint(host: String? = null): CanonicalOrigin? = null
+    suspend fun rememberLoginPreference(origin: CanonicalOrigin): Boolean = true
+    suspend fun hasRememberedLogin(origin: CanonicalOrigin): Boolean = false
+    suspend fun hasAutomaticLogin(origin: CanonicalOrigin): Boolean = false
+    /** Endpoint navigation revokes current authority without counting as deliberate sign-out. */
+    suspend fun leaveConnection() { signOut(cacheChoice = SignOutCacheChoice.KEEP) }
+    suspend fun forgetRememberedLogin(origin: CanonicalOrigin) {}
+    suspend fun noteSuccessfulEndpoint(origin: CanonicalOrigin) {}
+    suspend fun selectConnectionForEndpoint(origin: CanonicalOrigin): Boolean = false
 
     suspend fun checkStatus(origin: CanonicalOrigin): Result<HostStatus> = checkStatus(origin.originUrl)
     suspend fun checkStatus(origin: String): Result<HostStatus> =
@@ -87,6 +97,11 @@ interface AuthRepository {
             onSuccess = { login(it, username, password, provider) },
             onFailure = { Result.failure(it) }
         )
+
+    suspend fun login(origin: CanonicalOrigin, username: String, password: CharArray,
+        remember: Boolean, provider: String = ""): Result<AuthCredential> =
+        if (remember) login(origin, username, password, provider)
+        else { password.fill('\u0000'); Result.failure(IllegalStateException("Temporary login unsupported")) }
 
     suspend fun getStoredCredential(): AuthCredential? = getStoredCredential(origin = null as CanonicalOrigin?)
     suspend fun getStoredCredential(origin: CanonicalOrigin?): AuthCredential? = getStoredCredential()

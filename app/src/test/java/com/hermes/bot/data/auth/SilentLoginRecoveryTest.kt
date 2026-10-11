@@ -191,7 +191,7 @@ class SilentLoginRecoveryTest {
         var fail = false
         val cipher = object : VaultCipherEngine by key {
             override fun encrypt(plaintext: ByteArray, associatedData: ByteArray?): ByteArray {
-                if (fail && associatedData?.toString(Charsets.UTF_8)?.startsWith("LOCAL_LOGIN:") == true &&
+                if (fail && associatedData?.toString(Charsets.UTF_8)?.startsWith("ENDPOINT_LOGIN:") == true &&
                     plaintext.toString(Charsets.UTF_8).contains("synthetic-password"))
                     throw java.io.IOException("Synthetic persistence failure")
                 return key.encrypt(plaintext, associatedData)

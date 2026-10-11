@@ -99,6 +99,11 @@ class ConnectViewModel(
         authJob?.cancel()
         loginJob?.cancel()
         isAddMode = true
+        ++draftRevision
+        explicitPortEdit = false
+        serverNameEdited = false
+        endpointPreferenceJob?.cancel()
+        connectionSubmitJob?.cancel()
         resetToFirstLaunch()
         _uiState.update {
             it.copy(
@@ -140,6 +145,11 @@ class ConnectViewModel(
     val profileGenerationGate = ConnectionProfileGenerationGate()
     @Volatile private var gatewayStatusGeneration: Long? = null
     private var droppedGatewayGeneration: Long? = null
+    private var endpointPreferenceJob: Job? = null
+    private var draftRevision = 0L
+    private var explicitPortEdit = false
+    private var connectionSubmitJob: Job? = null
+    private var serverNameEdited = false
 
     init {
         if (initialServerNameError != null) {
@@ -217,6 +227,9 @@ class ConnectViewModel(
     fun onStartupPresented() { _uiState.update { it.copy(startupRoutePending = false) } }
 
     fun reloadSavedConnection() {
+        ++draftRevision
+        endpointPreferenceJob?.cancel()
+        connectionSubmitJob?.cancel()
         profileLoadJob?.cancel()
         profileGenerationGate.invalidate()
         val generation = profileGenerationGate.currentGeneration()
@@ -238,6 +251,7 @@ class ConnectViewModel(
     }
 
     fun updateServerName(newName: String) {
+        serverNameEdited = true
         val validationError = validateServerName(newName)
         if (validationError != null) {
             _uiState.update { it.copy(errorMessage = validationError) }
@@ -252,12 +266,66 @@ class ConnectViewModel(
         }
     }
 
+
+    private fun cancelDraftConnection() {
+        if (profileLoadJob?.isActive != true && testJob?.isActive != true && loginJob?.isActive != true &&
+            authJob?.isActive != true && connectionSubmitJob?.isActive != true) return
+        recovery?.invalidate()
+        authRepository?.invalidatePendingAuthentication()
+        profileGenerationGate.invalidate()
+        profileLoadJob?.cancel()
+        testJob?.cancel()
+        loginJob?.cancel()
+        authJob?.cancel()
+        connectionSubmitJob?.cancel()
+        onGatewayDisconnected()
+        resetToFirstLaunch()
+    }
+
+    fun updateRememberLogin(remember: Boolean) { _uiState.update { it.copy(rememberLogin = remember) } }
+
+    fun forgetSavedLogin(localId: String): Job {
+        authRepository?.invalidatePendingAuthentication()
+        return viewModelScope.launch {
+            try {
+                val profile = vaultStorage?.getConnectionProfile(localId) ?: return@launch
+                val origin = CanonicalOrigin.parseOrThrow(profile.normalizedOrigin)
+                authRepository?.forgetRememberedLogin(origin) ?: error("Authentication unavailable")
+                _uiState.update {
+                    it.copy(savedLoginMessage = "Saved login forgotten.", rememberLogin =
+                        if (CanonicalOrigin.parse(it.origin).getOrNull()?.isSameOrigin(origin) == true) false else it.rememberLogin)
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { _uiState.update { it.copy(savedLoginMessage = "Saved login could not be forgotten. Try again.") } }
+        }
+    }
+
     fun updateHost(newHost: String) {
+        if (newHost != _uiState.value.hostDraft) cancelDraftConnection()
         savedStateHandle[KEY_HOST] = newHost
         _uiState.update { it.copy(hostDraft = newHost, hostError = null) }
+        val revision = ++draftRevision
+        endpointPreferenceJob?.cancel()
+        val repository = authRepository ?: return
+        endpointPreferenceJob = viewModelScope.launch {
+            try {
+                val endpoint = repository.rememberedEndpoint(newHost.trim())
+                if (revision == draftRevision && !explicitPortEdit &&
+                    (endpoint == null || endpoint.scheme == CanonicalOrigin.Scheme.HTTP)) {
+                    val port = (endpoint?.port ?: 9119).toString()
+                    savedStateHandle[KEY_PORT] = port
+                    _uiState.update { it.copy(portDraft = port, portError = null) }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Explicit Connect still validates the entered address. */ }
+        }
     }
 
     fun updatePort(newPort: String) {
+        if (newPort != _uiState.value.portDraft) cancelDraftConnection()
+        explicitPortEdit = true
+        ++draftRevision
+        endpointPreferenceJob?.cancel()
         savedStateHandle[KEY_PORT] = newPort
         _uiState.update { it.copy(portDraft = newPort, portError = null) }
     }
@@ -293,6 +361,14 @@ class ConnectViewModel(
             is StructuredEndpointValidator.ValidationResult.Success -> Unit
         }
 
+        val preferenceRead = endpointPreferenceJob
+        if (preferenceRead?.isActive == true) {
+            if (connectionSubmitJob?.isActive != true) connectionSubmitJob = viewModelScope.launch {
+                preferenceRead.join()
+                testConnection()
+            }
+            return
+        }
         val canonicalOrigin = (result as StructuredEndpointValidator.ValidationResult.Success).origin
         profileLoadJob?.cancel()
         val generation = beginConnectionGeneration()
@@ -312,7 +388,7 @@ class ConnectViewModel(
                         // PR-6 REQ-06: an endpoint identity change is NOT the
                         // sign-out dialog — explicit KEEP (rotation still
                         // confines; no user was asked to purge).
-                        repository.signOut(cacheChoice = SignOutCacheChoice.KEEP)
+                        repository.leaveConnection()
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -324,6 +400,22 @@ class ConnectViewModel(
                     }
                 }
                 lastAttemptedOrigin = canonicalOrigin
+                val matchedProfile = !isAddMode && repository.selectConnectionForEndpoint(canonicalOrigin)
+                if (matchedProfile && !serverNameEdited) {
+                    val selected = vaultStorage?.getConnectionProfile()
+                    if (selected != null && profileGenerationGate.isCurrent(generation))
+                        _uiState.update { it.copy(serverNameDraft = selected.displayLabel) }
+                } else if (!isAddMode && !matchedProfile && vaultStorage != null) {
+                    val previous = vaultStorage.getConnectionProfile()
+                    if (CanonicalOrigin.parse(previous?.normalizedOrigin).getOrNull()?.isSameOrigin(canonicalOrigin) != true) {
+                        isAddMode = true
+                        if (!serverNameEdited) _uiState.update { it.copy(serverNameDraft = DEFAULT_SERVER_NAME) }
+                    }
+                }
+                val remember = repository.rememberLoginPreference(canonicalOrigin)
+                if (!profileGenerationGate.isCurrent(generation)) return@launch
+                _uiState.update { it.copy(rememberLogin = remember) }
+                reloadProfiles()
 
                 val statusResult = try {
                     repository.checkStatus(canonicalOrigin)
@@ -380,23 +472,44 @@ class ConnectViewModel(
                     return@launch
                 }
 
-                performGatewayConnect(canonicalOrigin, hostStatus, generation)
+                // An added profile must own authentication before borrowing an endpoint login.
+                if (isAddMode && recovery != null) {
+                    saveSuccessfulProfile(canonicalOrigin, generation)
+                    if (!profileGenerationGate.isCurrent(generation)) return@launch
+                    if (vaultStorage?.getConnectionProfile()?.normalizedOrigin != canonicalOrigin.originUrl) {
+                        setState(ConnectState.FIRST_LAUNCH)
+                        _uiState.update { it.copy(startupPresentation = StartupPresentation.SETUP,
+                            errorMessage = "Connection details could not be saved. Try again.") }
+                        return@launch
+                    }
+                }
+                performGatewayConnect(canonicalOrigin, hostStatus, generation, explicitConnect = true)
             } catch (cancelled: CancellationException) {
                 if (profileGenerationGate.isCurrent(generation) && _uiState.value.state == ConnectState.PREFLIGHT_LOADING) {
                     resetToFirstLaunch()
                 }
                 throw cancelled
+            } catch (_: Exception) {
+                reportSavedConnectionReadFailure(generation)
             }
         }
     }
 
-    private suspend fun performGatewayConnect(canonicalOrigin: CanonicalOrigin, hostStatus: HostStatus?, generation: Long) {
+    private fun reportSavedConnectionReadFailure(generation: Long) {
+        if (!profileGenerationGate.isCurrent(generation)) return
+        setState(ConnectState.FIRST_LAUNCH)
+        _uiState.update { it.copy(startupPresentation = StartupPresentation.SETUP,
+            loginLoading = false, passwordDraft = "", errorMessage = "Saved connection could not be loaded. Try again.") }
+    }
+
+    private suspend fun performGatewayConnect(canonicalOrigin: CanonicalOrigin, hostStatus: HostStatus?, generation: Long,
+        explicitConnect: Boolean = false) {
         val repository = authRepository ?: return
         val adapter = gatewayAdapter ?: return
         if (recovery != null) {
             recoveryOperationOwned = true
             try {
-                val connected = recovery.connect(canonicalOrigin, retryPolicy = true)
+                val connected = recovery.connect(canonicalOrigin, retryPolicy = true, explicitConnect = explicitConnect)
                 if (!profileGenerationGate.isCurrent(generation)) return
                 if (!connected) {
                     setState(when (recovery.phase.value) {
@@ -409,10 +522,7 @@ class ConnectViewModel(
                 saveSuccessfulProfile(canonicalOrigin, generation)
                 if (!profileGenerationGate.isCurrent(generation)) return
                 if (adapter.connectionStatus.value != ConnectionStatus.CONNECTED) { setState(ConnectState.HOST_UNREACHABLE); return }
-                val persistenceError = _uiState.value.errorMessage
-                setState(ConnectState.CONNECTED_COMPATIBLE)
-                _uiState.update { it.copy(errorMessage = persistenceError) }
-                onGatewayConnected(canonicalOrigin)
+                completeSuccessfulConnection(canonicalOrigin, generation)
                 return
             } finally { recoveryOperationOwned = false }
         }
@@ -477,10 +587,7 @@ class ConnectViewModel(
         // see the committed profile, and a socket lost during the save is not ready.
         when (adapter.connectionStatus.value) {
             ConnectionStatus.CONNECTED -> {
-                val persistenceError = _uiState.value.errorMessage
-                setState(ConnectState.CONNECTED_COMPATIBLE)
-                _uiState.update { it.copy(errorMessage = persistenceError) }
-                onGatewayConnected(canonicalOrigin)
+                completeSuccessfulConnection(canonicalOrigin, generation)
             }
             ConnectionStatus.AUTHENTICATION_REQUIRED -> setState(ConnectState.AUTH_REQUIRED)
             else -> setState(ConnectState.HOST_UNREACHABLE)
@@ -566,7 +673,7 @@ class ConnectViewModel(
                         throw IllegalStateException("Connection could not be saved")
                     }
                 }
-                repository.login(canonical, username, passwordChars)
+                repository.login(canonical, username, passwordChars, remember = current.rememberLogin)
             } catch (cancelled: CancellationException) {
                 _uiState.update { it.copy(loginLoading = false) }
                 throw cancelled
@@ -627,6 +734,10 @@ class ConnectViewModel(
      * only ever an explicitly designated [SignOutCacheChoice.KEEP].
      */
     fun disconnect(cacheChoice: SignOutCacheChoice) {
+        ++draftRevision
+        endpointPreferenceJob?.cancel()
+        connectionSubmitJob?.cancel()
+        authRepository?.invalidatePendingAuthentication()
         profileGenerationGate.invalidate()
         diagnostics.emit(CatalogEvent.GATEWAY_DISCONNECTED)
         profileLoadJob?.cancel()
@@ -661,6 +772,9 @@ class ConnectViewModel(
             availableProfileIds = currentProfiles.map { it.localId }
         )
         if (decision !is ProfileSwitchDecision.Allowed) return@launch
+        ++draftRevision
+        endpointPreferenceJob?.cancel()
+        connectionSubmitJob?.cancel()
 
         // 1. Persist intent first
         vault.setActiveProfileId(targetLocalId)
@@ -683,7 +797,10 @@ class ConnectViewModel(
 
         // 4. Rebind & auto-connect
         isAddMode = false
-        loadStoredProfile()
+        val generation = profileGenerationGate.currentGeneration()
+        try { loadStoredProfile(explicitConnect = true) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { reportSavedConnectionReadFailure(generation) }
         reloadProfiles()
     }
 
@@ -755,13 +872,24 @@ class ConnectViewModel(
         return if (className.isBlank()) cause else "$cause: $className"
     }
 
-    private suspend fun loadStoredProfile() {
+    private suspend fun loadStoredProfile(explicitConnect: Boolean = false) {
+        val draftAtLoad = draftRevision
         val loadGeneration = profileGenerationGate.currentGeneration()
+        if (!explicitConnect) {
+            val endpoint = authRepository?.rememberedEndpoint()
+            if (endpoint != null && profileGenerationGate.isCurrent(loadGeneration) && draftAtLoad == draftRevision)
+                authRepository?.selectConnectionForEndpoint(endpoint)
+        }
         val profile = vaultStorage?.getConnectionProfile() ?: run {
+            val endpoint = authRepository?.rememberedEndpoint()
+            if (endpoint != null && endpoint.scheme == CanonicalOrigin.Scheme.HTTP &&
+                profileGenerationGate.isCurrent(loadGeneration) && draftAtLoad == draftRevision) {
+                _uiState.update { it.copy(hostDraft = endpoint.host, portDraft = endpoint.port.toString()) }
+            }
             if (profileGenerationGate.isCurrent(loadGeneration)) resetToFirstLaunch()
             return
         }
-        if (!profileGenerationGate.isCurrent(loadGeneration)) return
+        if (!profileGenerationGate.isCurrent(loadGeneration) || draftAtLoad != draftRevision) return
         val parsed = CanonicalOrigin.parse(profile.normalizedOrigin).getOrNull()
         if (parsed?.scheme == CanonicalOrigin.Scheme.HTTPS) vaultStorage?.clearAuthCredential(profile.localId)
         if (parsed == null || parsed.pathPrefix.isNotEmpty()) {
@@ -770,6 +898,8 @@ class ConnectViewModel(
             }
             return
         }
+        serverNameEdited = false
+        explicitPortEdit = false
         val restoredServerNameError = validateServerName(profile.displayLabel)
         val restoredServerName = profile.displayLabel
             .takeIf { restoredServerNameError == null }
@@ -796,6 +926,9 @@ class ConnectViewModel(
         // Auto-reconnect: if we have a valid stored session for this origin, attempt gateway connect
         if (parsed.scheme != CanonicalOrigin.Scheme.HTTPS && restoredServerNameError == null) {
             val repository = authRepository ?: return
+            val remember = repository.rememberLoginPreference(parsed)
+            if (!profileGenerationGate.isCurrent(loadGeneration)) return
+            _uiState.update { it.copy(rememberLogin = remember) }
             val localLogin = repository.prepareLocalLogin(parsed)
             if (localLogin) _uiState.update { it.copy(startupPresentation = StartupPresentation.SESSIONS) }
             val hasSession = try {
@@ -804,15 +937,46 @@ class ConnectViewModel(
                 throw cancelled
             }
             if (!profileGenerationGate.isCurrent(loadGeneration)) return
-            if (hasSession || localLogin) {
-                _uiState.update { it.copy(startupPresentation = StartupPresentation.SESSIONS) }
+            val automaticLogin = repository.hasAutomaticLogin(parsed)
+            if (!profileGenerationGate.isCurrent(loadGeneration)) return
+            if (hasSession || localLogin || explicitConnect || automaticLogin) {
+                _uiState.update { it.copy(startupPresentation = if (hasSession || localLogin || explicitConnect)
+                    StartupPresentation.SESSIONS else StartupPresentation.SETUP) }
                 val generation = beginConnectionGeneration()
                 setState(ConnectState.PREFLIGHT_LOADING)
                 lastAttemptedOrigin = parsed
                 if (recovery != null) onGatewayConnected(parsed)
-                performGatewayConnect(parsed, null, generation)
+                performGatewayConnect(parsed, null, generation, explicitConnect = explicitConnect)
             } else {
-                setState(ConnectState.AUTH_REQUIRED)
+                val savedLogin = repository.hasRememberedLogin(parsed)
+                if (!profileGenerationGate.isCurrent(loadGeneration)) return
+                if (savedLogin) _uiState.update { it.copy(startupPresentation = StartupPresentation.SETUP) }
+                setState(if (savedLogin) ConnectState.FIRST_LAUNCH else ConnectState.AUTH_REQUIRED)
+            }
+        }
+    }
+
+    private suspend fun completeSuccessfulConnection(origin: CanonicalOrigin, generation: Long) {
+        recordSuccessfulEndpoint(origin, generation)
+        if (!profileGenerationGate.isCurrent(generation)) return
+        when (gatewayAdapter?.connectionStatus?.value) {
+            ConnectionStatus.CONNECTED -> {
+                val persistenceError = _uiState.value.errorMessage
+                setState(ConnectState.CONNECTED_COMPATIBLE)
+                _uiState.update { it.copy(errorMessage = persistenceError) }
+                onGatewayConnected(origin)
+            }
+            ConnectionStatus.AUTHENTICATION_REQUIRED -> setState(ConnectState.AUTH_REQUIRED)
+            else -> setState(ConnectState.HOST_UNREACHABLE)
+        }
+    }
+
+    private suspend fun recordSuccessfulEndpoint(origin: CanonicalOrigin, generation: Long) {
+        try { authRepository?.noteSuccessfulEndpoint(origin) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            if (profileGenerationGate.isCurrent(generation)) _uiState.update {
+                it.copy(errorMessage = "Connected, but the last-used address could not be saved.")
             }
         }
     }

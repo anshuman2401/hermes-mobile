@@ -17,7 +17,7 @@ class SignOutCacheChoicePolicyTest {
     fun policy_labelsExact_defaultIsKeep_cancelAborts_resolveExhaustive() {
         assertEquals("Sign out", SignOutCacheChoicePolicy.title())
         assertEquals(
-            "Sign out of this connection? Choose what to do with this device's saved offline cache.",
+            "Sign out of this connection? Remembered credentials stay encrypted on this device. Automatic login pauses until you connect again. Choose what to do with this device's saved offline cache.",
             SignOutCacheChoicePolicy.message()
         )
         assertEquals("Keep saved cache on this device", SignOutCacheChoicePolicy.keepLabel())
