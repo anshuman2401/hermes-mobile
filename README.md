@@ -28,6 +28,14 @@ For a documentation-only change, review the text and links and run `git diff --c
 
 This repository has no GitHub Actions verification workflow. Run `./scripts/verify.sh` locally for executable changes and include the results in the PR as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## App identity and versioning
+
+The release application ID is `com.anshuman2401.hermesmobile`. Debug builds use `com.anshuman2401.hermesmobile.debug`; synthetic stream-profile builds use `.streamprofile`. The internal Kotlin namespace remains `com.hermes.bot`. Changing from the old application ID creates a separate installation with fresh app-private storage and Keystore keys; local data is not migrated automatically.
+
+[version.properties](version.properties) is the single source for the Android version and the Settings footer. The initial public version is `0.1.0`, indicating a pre-1.0 app. Use `MAJOR.MINOR.PATCH`: while below 1.0, increment MINOR for features or breaking changes and PATCH for compatible fixes. From 1.0 onward, increment MAJOR for breaking changes, MINOR for compatible features, and PATCH for compatible fixes. Reset lower components when incrementing a higher one. Version numbers have no leading zeros.
+
+For each distributed update, change `VERSION_NAME` as appropriate and increase `VERSION_CODE` above every previously distributed code for that application ID; never reset or derive the code from Git commit counts. The build rejects malformed names and codes outside Android's supported range. Debug builds append `-debug`, and Settings shows the installed build version. Keep the application ID and signing identity stable for future updates. Version edits do not publish a release; releases and tags require maintainer authorization.
+
 ## First run and connecting
 
 On a fresh install, the app opens its Connect setup. Enter a local connection label, the host or IP address, and port for a **compatible Hermes host you control**. The app checks the host's status and supported authentication before connecting; a compatible password-session host can then prompt for sign-in. A running upstream Hermes Agent alone is not proof that its status, authentication, WebSocket ticket, and gateway capabilities match this client. The [current architecture](specs/architecture/current-system.md) describes the app's protocol boundary.
