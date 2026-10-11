@@ -920,8 +920,6 @@ fun ChatScreen(
             if ((recoveryState == com.hermes.bot.feature.connect.ConnectState.PREFLIGHT_LOADING ||
                 uiState?.showHistoryLoading == true) && uiState?.isCachedHistoryPreview != true) {
                 androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Text(if (recoveryState == com.hermes.bot.feature.connect.ConnectState.PREFLIGHT_LOADING) "Connecting…" else "Syncing…",
-                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp))
             } else if (recoveryState == com.hermes.bot.feature.connect.ConnectState.AUTH_REQUIRED) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Sign in required", modifier = Modifier.weight(1f))
@@ -1018,12 +1016,8 @@ fun ChatScreen(
                     .weight(1f)
             ) {
             if (showInitialLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
+                // The header's horizontal progress bar covers this load. Keep the
+                // transcript area empty until history arrives, without an empty-state prompt.
             } else if (timeline.isEmpty()) {
                 Box(
                     modifier = Modifier
