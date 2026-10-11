@@ -7,6 +7,7 @@ import com.hermes.bot.data.gateway.attachmentFailureKind
 import com.hermes.bot.data.session.SessionRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -58,15 +59,15 @@ internal class ChatAttachmentController(
         verifyServerImageCountAfterReconnect = true
     }
 
-    fun onPhotoSelected(uri: String) {
+    fun onPhotoSelected(uri: String): Job? {
         val state = uiState.value
-        val runtimeId = state.runtimeSessionId ?: return
-        val repo = repository ?: return
-        val reader = photoAttachmentReader ?: return
-        if (!state.canAttachImage || !gatewayAvailable()) return
+        val runtimeId = state.runtimeSessionId ?: return null
+        val repo = repository ?: return null
+        val reader = photoAttachmentReader ?: return null
+        if (!state.canAttachImage || !gatewayAvailable()) return null
         val epoch = attachmentEpoch
         uiState.update { it.copy(isAttachingImage = true, attachmentErrorMessage = null) }
-        scope.launch {
+        return scope.launch {
             try {
                 val photo = withContext(photoReadContext) { reader.read(uri) }
                 if (!ownsAttachmentResult(epoch, runtimeId)) return@launch

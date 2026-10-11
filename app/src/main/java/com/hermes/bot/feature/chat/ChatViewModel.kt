@@ -168,7 +168,8 @@ class ChatViewModel(
     private val voiceClock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val approvalRepository: com.hermes.bot.data.approval.ApprovalRepository? = null,
     private val fileRepository: com.hermes.bot.data.files.ConversationFileRepository? = null,
-    private val chatPreviewRepository: ChatPreviewRepository? = null
+    private val chatPreviewRepository: ChatPreviewRepository? = null,
+    private val cameraPhotoStore: com.hermes.bot.data.attachments.CameraPhotoStore? = null
 ) : ViewModel() {
 
     val files by lazy { fileRepository?.let {
@@ -239,6 +240,18 @@ class ChatViewModel(
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    private val cameraController = CameraCaptureController(viewModelScope, _uiState, cameraPhotoStore,
+        photoReadContext, attach = { attachmentController.onPhotoSelected(it) })
+    val cameraState = cameraController.state
+    fun startCamera() = cameraController.start()
+    fun claimCameraLaunch(token: Long): String? = cameraController.claimLaunch(token)
+    fun cameraResult(token: Long, success: Boolean, launchFailed: Boolean = false) = cameraController.result(token, success, launchFailed)
+    fun useCameraPhoto() = cameraController.usePhoto()
+    fun retakeCameraPhoto() = cameraController.retake()
+    fun cancelCamera() = cameraController.cancel()
+    fun cameraBackground(changingConfigurations: Boolean) = cameraController.background(changingConfigurations)
+    fun dismissCameraError() = cameraController.dismissError()
 
     private val attachmentController by lazy {
         ChatAttachmentController(
@@ -794,6 +807,7 @@ class ChatViewModel(
     }
 
     init {
+        viewModelScope.launch { _uiState.collect { cameraController.reconcile() } }
         stopPreviewObservation = chatPreviewRepository?.observeInvalidation {
             viewModelScope.launch {
                 val owner = memoryPreviewOwner ?: return@launch
@@ -1914,6 +1928,7 @@ class ChatViewModel(
         recovery: Boolean = false, externalGap: Boolean = false, manual: Boolean = false) {
         if (_uiState.value.edit?.busy == true) return
         val repo = sessionRepository ?: return
+        cancelCamera()
         val pickerReadRevision = pickerRevision
         val pickerReadObservation = pickerObservationRevision
         pickerCatalogRevision++
@@ -2748,6 +2763,8 @@ class ChatViewModel(
             current.isStreaming
         ) return
 
+        cancelCamera()
+
         if (storedHistoryScope != null) {
             startHistoryRead(preserveAttachments = true, manual = true)
             return
@@ -3564,6 +3581,7 @@ class ChatViewModel(
     }
 
     fun submitPrompt() {
+        if (_uiState.value.cameraBusy) return
         channelAutoSend?.cancel()
         channelAutoSend = null
         if (_uiState.value.edit != null) { resendEditedMessage(); return }
@@ -4919,6 +4937,7 @@ class ChatViewModel(
      * synchronously on the caller's context instead of a doomed launch.
      */
     override fun onCleared() {
+        cancelCamera()
         stopPreviewObservation?.invoke()
         stopPreviewObservation = null
         editGeneration++

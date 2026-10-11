@@ -5,7 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.ByteArrayOutputStream
 
-internal const val MAX_PHOTO_BYTES = 25 * 1024 * 1024
+internal const val MAX_PHOTO_BYTES = com.hermes.bot.data.attachments.MAX_IMAGE_ATTACHMENT_BYTES
 
 data class SelectedPhoto(val bytes: ByteArray, val displayName: String, val ext: String?)
 

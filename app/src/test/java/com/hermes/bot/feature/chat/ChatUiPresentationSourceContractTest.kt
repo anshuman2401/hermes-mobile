@@ -69,7 +69,7 @@ class ChatUiPresentationSourceContractTest {
     }
 
     @Test
-    fun attachmentChooser_isAnchoredAtComposerButtonWithPickerCallbacks() {
+    fun attachmentChooser_opensSheetFromComposerWithCameraAndPickerCallbacks() {
         val composer = source("com/hermes/bot/feature/chat/components/ChatComposer.kt")
         val screen = source("com/hermes/bot/feature/chat/ChatScreen.kt")
         val menu = source("com/hermes/bot/feature/chat/components/AttachmentSheet.kt")
@@ -82,10 +82,12 @@ class ChatUiPresentationSourceContractTest {
         assertTrue(screen.contains("onDismiss = { showAttachmentMenu = false }"))
         assertTrue(screen.contains("photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))"))
         assertTrue(screen.contains("documentPicker.launch(DOCUMENT_MIME_TYPES)"))
-        assertTrue(menu.contains("DropdownMenu(expanded = expanded, onDismissRequest = onDismiss)"))
-        assertTrue(menu.contains("Text(\"Photos\")") && menu.contains("Text(\"Documents\")"))
-        assertTrue(menu.contains("Icons.Default.AccountBox") && menu.contains("Icons.AutoMirrored.Filled.List"))
-        assertFalse(menu.contains("ModalBottomSheet"))
+        assertTrue(menu.contains("ModalBottomSheet("))
+        assertTrue(menu.contains("AttachmentAction(\"Camera\"") && menu.contains("AttachmentAction(\"Photos\"") && menu.contains("AttachmentAction(\"Documents\""))
+        assertTrue(screen.contains("ActivityResultContracts.TakePicture()"))
+        assertTrue(screen.contains("viewModel?.startCamera()"))
+        assertTrue(screen.contains("viewModel?.useCameraPhoto()"))
+        assertFalse(menu.contains("DropdownMenu("))
     }
 
     @Test

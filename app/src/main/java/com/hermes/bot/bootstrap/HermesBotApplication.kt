@@ -12,6 +12,7 @@ class HermesBotApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        runCatching { com.hermes.bot.data.attachments.AndroidCameraPhotoStore(this).clearAbandoned() }
         runCatching { com.hermes.bot.feature.chat.files.AndroidFileActions.clearOldExports(this) }
         runCatching { com.hermes.bot.data.files.DefaultManagedFileRepository.clearOldTransfers(cacheDir) }
         val privateDiagnostics = PrivateDiagnosticsRepository.fromContext(filesDir)

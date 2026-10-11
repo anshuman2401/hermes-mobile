@@ -56,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
@@ -85,6 +86,7 @@ import com.hermes.bot.feature.chat.components.ActivityBottomSheet
 import com.hermes.bot.feature.chat.components.AssistantMessageBubble
 import com.hermes.bot.feature.chat.components.ChatComposer
 import com.hermes.bot.feature.chat.components.AttachmentMenu
+import com.hermes.bot.feature.chat.components.CameraPhotoReview
 import com.hermes.bot.feature.chat.components.ModelPickerDialog
 import com.hermes.bot.feature.chat.components.ExecutionTraceHeader
 import com.hermes.bot.feature.chat.components.ExecutionTraceSurface
@@ -229,6 +231,7 @@ fun ChatScreen(
     // BLD-006 S1: lifecycle-aware collection — no state updates while the host
     // is stopped, and collection fully stops when the composable leaves.
     val uiState = viewModel?.uiState?.collectAsStateWithLifecycle()?.value ?: previewUiState
+    val cameraState = viewModel?.cameraState?.collectAsStateWithLifecycle()?.value ?: CameraUiState()
     val fileController = viewModel?.files
     val fileState = fileController?.state?.collectAsStateWithLifecycle()?.value
     LaunchedEffect(uiState?.timeline, uiState?.durableSessionId, uiState?.runtimeSessionId, uiState?.isAttachmentConnectionAvailable, uiState?.savedSnapshotCapturedAtMillis) {
@@ -280,6 +283,36 @@ fun ChatScreen(
     }
 
     var showAttachmentMenu by remember(sessionId) { mutableStateOf(false) }
+    // Only the opaque launch token survives rotation; photo data and grants remain in the owned VM.
+    var cameraLaunchToken by rememberSaveable(sessionId) { mutableStateOf<Long?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val token = cameraLaunchToken
+        cameraLaunchToken = null
+        if (token != null) viewModel?.cameraResult(token, success)
+    }
+    LaunchedEffect(cameraState.phase, cameraState.token) {
+        if (cameraState.phase == CameraPhase.READY) {
+            val token = cameraState.token ?: return@LaunchedEffect
+            val uri = viewModel?.claimCameraLaunch(token) ?: return@LaunchedEffect
+            cameraLaunchToken = token
+            try { cameraLauncher.launch(Uri.parse(uri)) }
+            catch (_: Exception) {
+                cameraLaunchToken = null
+                viewModel?.cameraResult(token, success = false, launchFailed = true)
+            }
+        }
+    }
+    CameraPhotoReview(cameraState, onCancel = { viewModel?.cancelCamera() },
+        onRetake = { viewModel?.retakeCameraPhoto() }, onUse = { viewModel?.useCameraPhoto() })
+    cameraState.error?.let { message ->
+        AlertDialog(onDismissRequest = { viewModel?.dismissCameraError() }, title = { Text("Camera photo") },
+            text = { Text(message) }, confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel?.dismissCameraError() }) { Text("OK") }
+            })
+    }
+    LaunchedEffect(uiState?.canAttachImage) {
+        if (uiState?.canAttachImage != true) showAttachmentMenu = false
+    }
     var photoPickerOwnerSession by remember(sessionId) { mutableStateOf<String?>(null) }
     var documentPickerOwnerSession by remember(sessionId) { mutableStateOf<String?>(null) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { selected ->
@@ -330,13 +363,20 @@ fun ChatScreen(
     DisposableEffect(viewModel, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) { viewModel?.setQueueVisibility(true); viewModel?.setSubagentVisibility(true); viewModel?.setApprovalVisibility(true) }
-            if (event == Lifecycle.Event.ON_STOP) { fileController?.background(); viewModel?.setQueueVisibility(false, pauseOnHide = (context as? android.app.Activity)?.isChangingConfigurations != true); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
+            if (event == Lifecycle.Event.ON_STOP) { viewModel?.cameraBackground((context as? android.app.Activity)?.isChangingConfigurations == true); fileController?.background(); viewModel?.setQueueVisibility(false, pauseOnHide = (context as? android.app.Activity)?.isChangingConfigurations != true); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         viewModel?.setSubagentVisibility(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
         viewModel?.setApprovalVisibility(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
         viewModel?.setQueueVisibility(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); viewModel?.setQueueVisibility(false, pauseOnHide = (context as? android.app.Activity)?.isChangingConfigurations != true); viewModel?.setSubagentVisibility(false); viewModel?.setApprovalVisibility(false); viewModel?.cancelDictation() }
+        onDispose {
+            if ((context as? android.app.Activity)?.isChangingConfigurations != true) viewModel?.cancelCamera()
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel?.setQueueVisibility(false, pauseOnHide = (context as? android.app.Activity)?.isChangingConfigurations != true)
+            viewModel?.setSubagentVisibility(false)
+            viewModel?.setApprovalVisibility(false)
+            viewModel?.cancelDictation()
+        }
     }
     uiState?.let { state ->
         SubagentDetailSheet(state.subagents, onBack = { viewModel?.backSubagent() }, onDismiss = { viewModel?.closeSubagent() },
@@ -788,6 +828,12 @@ fun ChatScreen(
                         attachmentMenu = {
                             AttachmentMenu(
                                 expanded = showAttachmentMenu,
+                                onCamera = {
+                                    showAttachmentMenu = false
+                                    keyboard?.hide()
+                                    focusManager.clearFocus()
+                                    viewModel?.startCamera()
+                                },
                                 onPhotos = {
                                     showAttachmentMenu = false
                                     photoPickerOwnerSession = sessionId
