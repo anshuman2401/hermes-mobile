@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit
 
 class HostUpdateRepositoryTest {
     @get:Rule val temp = TemporaryFolder()
-    private fun fixture() = Fixture(temp.newFolder())
+    private fun fixture(transport: HostUpdateTransport? = null) = Fixture(temp.newFolder(), transport)
     private val available = """{"install_method":"git","current_version":"1.0","behind":2,"update_available":true,"can_apply":true,"commits":[{"summary":"Synthetic change"},{"summary":"Second synthetic change"}]}"""
 
     @Test fun checkUsesExactAuthenticatedOriginAndBoundedHostFields() = runBlocking {
@@ -151,7 +151,32 @@ class HostUpdateRepositoryTest {
         }
     }
 
-    private class Fixture(folder: java.io.File) : AutoCloseable {
+    @Test fun statusHeaderAndBodyTimeoutsAreReportedWithoutConnectionFailure() = runBlocking {
+        val client = okhttp3.OkHttpClient.Builder().readTimeout(100, TimeUnit.MILLISECONDS).build()
+        fixture(OkHttpHostUpdateTransport(client)).use { f ->
+            f.prepare()
+            f.server.enqueue(MockResponse().setHeadersDelay(1, TimeUnit.SECONDS).setBody("{}"))
+            assertEquals(HostUpdateFailure.TIMEOUT, (f.repo.status(f.scope()) as HostUpdateResult.Failed).reason)
+            f.server.enqueue(MockResponse().setBodyDelay(1, TimeUnit.SECONDS).setBody("{}"))
+            assertEquals(HostUpdateFailure.TIMEOUT, (f.repo.status(f.scope()) as HostUpdateResult.Failed).reason)
+            assertEquals(2, f.server.requestCount)
+        }
+    }
+
+    @Test fun timedOutStartRemainsUnknownAndNeverRetries() = runBlocking {
+        val client = okhttp3.OkHttpClient.Builder().readTimeout(100, TimeUnit.MILLISECONDS).build()
+        fixture(OkHttpHostUpdateTransport(client)).use { f ->
+            f.prepare()
+            f.server.enqueue(MockResponse().setBody(available))
+            f.server.enqueue(MockResponse().setHeadersDelay(1, TimeUnit.SECONDS).setBody("""{"ok":true,"action_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"""))
+            assertEquals(HostUpdateFailure.UNKNOWN, (f.repo.start(f.scope()) as HostUpdateResult.Failed).reason)
+            assertEquals("GET", f.request().method)
+            assertEquals("POST", f.request().method)
+            assertEquals(2, f.server.requestCount)
+        }
+    }
+
+    private class Fixture(folder: java.io.File, transport: HostUpdateTransport?) : AutoCloseable {
         val server = MockWebServer().apply { start() }
         val origin = CanonicalOrigin.parse(server.url("/").toString().removeSuffix("/")).getOrThrow()
         val vault = EncryptedVault(folder, AesGcmCipherEngine(InMemoryMasterKeyProvider()))
@@ -159,7 +184,7 @@ class HostUpdateRepositoryTest {
         val gateway = DefaultGatewayProtocolAdapter(FakeGatewayTransport(), dispatcher = Dispatchers.Unconfined,
             readyTimeoutMs = 1000, rpcTimeoutMs = 1000)
         private val owners = DefaultHostInsightsRepository(vault, auth, gateway)
-        val repo = DefaultHostUpdateRepository(owners, HostUpdateAdapter(auth))
+        val repo = DefaultHostUpdateRepository(owners, HostUpdateAdapter(auth, transport ?: OkHttpHostUpdateTransport()))
         suspend fun prepare() {
             vault.saveConnectionProfile(ConnectionProfile("synthetic-local", origin.originUrl, "Synthetic"))
             vault.setActiveProfileId("synthetic-local")

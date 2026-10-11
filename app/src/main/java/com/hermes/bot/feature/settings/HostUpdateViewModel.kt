@@ -23,7 +23,8 @@ data class HostUpdateUiState(
     val failure: HostUpdateFailure? = null,
     val phase: HostUpdatePhase = HostUpdatePhase.IDLE,
     val confirmationOpen: Boolean = false,
-    val canTrack: Boolean = false
+    val canTrack: Boolean = false,
+    val retryScheduled: Boolean = false
 ) {
     val canStart: Boolean get() = !loading && canTrack && phase == HostUpdatePhase.IDLE && check?.appUpdateEligible == true
     override fun toString() = "HostUpdateUiState([private])"
@@ -42,6 +43,7 @@ class HostUpdateViewModel(
     private var original: InsightsScope? = null
     private var scope: InsightsScope? = null
     private var actionId: String? = null
+    private var statusReadFailure: HostUpdateFailure? = null
 
     fun open() {
         leave()
@@ -54,21 +56,12 @@ class HostUpdateViewModel(
                     is HostUpdateResult.Ready -> {
                         if (request != generation) return@launch
                         original = captured.value; scope = captured.value
-                        val status = repository.status(captured.value)
-                        if (request != generation) return@launch
-                        if (status is HostUpdateResult.Failed) {
-                            loadWithoutTracking(captured.value, status.reason, request)
-                            return@launch
-                        }
-                        val current = (status as HostUpdateResult.Ready).value
-                        mutable.value = mutable.value.copy(canTrack = true,
-                            phase = if (current.running) HostUpdatePhase.WAITING else HostUpdatePhase.IDLE)
-                        loadCheck(captured.value, request)
-                        if (current.running && request == generation) poll(request)
+                        readStatusAndCheck(captured.value, request)
                     }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-              catch (_: Exception) { if (request == generation) mutable.value = mutable.value.copy(loading = false, failure = HostUpdateFailure.UNAVAILABLE) }
+              catch (_: Exception) { if (request == generation) readUnavailable() }
+            retryFailedReads(request)
         }
     }
 
@@ -77,32 +70,75 @@ class HostUpdateViewModel(
         val captured = scope ?: return open()
         val request = ++generation
         job?.cancel()
-        mutable.value = mutable.value.copy(loading = true, failure = null)
+        mutable.value = mutable.value.copy(loading = true, failure = null, retryScheduled = false, confirmationOpen = false)
         job = viewModelScope.launch {
-            try {
-                val status = repository.status(captured)
-                if (request != generation) return@launch
-                when (status) {
-                    is HostUpdateResult.Failed -> {
-                        mutable.value = mutable.value.copy(loading = false, failure = status.reason, canTrack = false,
-                            confirmationOpen = false, phase = if (actionId != null) HostUpdatePhase.UNKNOWN else mutable.value.phase)
-                        if (actionId == null && mutable.value.phase == HostUpdatePhase.IDLE)
-                            loadWithoutTracking(captured, status.reason, request)
-                    }
-                    is HostUpdateResult.Ready -> {
-                        if (actionId != null && !status.value.running) {
-                            applyTerminal(status.value.actionId, status.value.outcome, request)
-                        } else {
-                            mutable.value = mutable.value.copy(canTrack = true,
-                                phase = if (status.value.running) HostUpdatePhase.WAITING else mutable.value.phase)
-                            loadCheck(captured, request)
-                            if (status.value.running && request == generation) poll(request)
-                        }
+            readStatusAndCheck(captured, request)
+            retryFailedReads(request)
+        }
+    }
+
+    private suspend fun readStatusAndCheck(captured: InsightsScope, request: Long) {
+        if (request != generation) return
+        statusReadFailure = null
+        try {
+            val status = repository.status(captured)
+            if (request != generation) return
+            statusReadFailure = (status as? HostUpdateResult.Failed)?.reason
+            when (status) {
+                is HostUpdateResult.Failed -> {
+                    mutable.value = mutable.value.copy(loading = false, failure = status.reason, canTrack = false,
+                        confirmationOpen = false, phase = if (actionId != null) HostUpdatePhase.UNKNOWN else mutable.value.phase)
+                    if (actionId == null && mutable.value.phase == HostUpdatePhase.IDLE)
+                        loadWithoutTracking(captured, status.reason, request)
+                }
+                is HostUpdateResult.Ready -> {
+                    if (actionId != null && !status.value.running) {
+                        applyTerminal(status.value.actionId, status.value.outcome, request)
+                    } else {
+                        mutable.value = mutable.value.copy(canTrack = true,
+                            phase = if (status.value.running) HostUpdatePhase.WAITING else mutable.value.phase)
+                        loadCheck(captured, request)
+                        if (status.value.running && request == generation) poll(request)
                     }
                 }
-            } catch (cancelled: CancellationException) { throw cancelled }
-              catch (_: Exception) { if (request == generation) mutable.value = mutable.value.copy(loading = false, failure = HostUpdateFailure.UNAVAILABLE) }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+          catch (_: Exception) { if (request == generation) readUnavailable() }
+    }
+
+    private fun readUnavailable() {
+        mutable.value = mutable.value.copy(loading = false, failure = HostUpdateFailure.UNAVAILABLE,
+            canTrack = false, confirmationOpen = false, check = null, checkedAt = null)
+    }
+
+    private fun shouldRetryRead(): Boolean {
+        val current = mutable.value
+        if (scope == null || actionId != null || current.phase != HostUpdatePhase.IDLE) return false
+        if (statusReadFailure != null && statusReadFailure !in transientReadFailures) return false
+        if (current.failure in transientReadFailures) return true
+        if (current.failure == HostUpdateFailure.STATUS_UNAVAILABLE) return statusReadFailure in transientReadFailures
+        val check = current.check
+        return current.failure == null && check?.installMethod == "git" && check.canApply &&
+            !check.available && check.behind == null
+    }
+
+    private suspend fun retryFailedReads(request: Long) {
+        while (request == generation && shouldRetryRead()) {
+            mutable.value = mutable.value.copy(retryScheduled = true)
+            waitForPoll()
+            if (request != generation) return
+            val captured = scope ?: return
+            // Retry the same owner, never adopt a changed connection/auth authority.
+            if (!repository.isCurrent(captured)) {
+                if (request == generation) mutable.value = mutable.value.copy(loading = false, retryScheduled = false,
+                    failure = HostUpdateFailure.STALE, canTrack = false, confirmationOpen = false, check = null, checkedAt = null)
+                return
+            }
+            if (request != generation) return
+            mutable.value = mutable.value.copy(loading = true, failure = null, retryScheduled = false, confirmationOpen = false)
+            readStatusAndCheck(captured, request)
         }
+        if (request == generation) mutable.value = mutable.value.copy(retryScheduled = false)
     }
 
     fun requestUpdate() {
@@ -136,7 +172,7 @@ class HostUpdateViewModel(
     }
 
     private suspend fun loadWithoutTracking(captured: InsightsScope, failure: HostUpdateFailure, request: Long) {
-        val canRead = failure in setOf(HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)
+        val canRead = failure in setOf(HostUpdateFailure.TIMEOUT, HostUpdateFailure.UNAVAILABLE, HostUpdateFailure.MALFORMED, HostUpdateFailure.UNSUPPORTED)
         mutable.value = mutable.value.copy(loading = canRead, failure = failure, check = null,
             checkedAt = null, canTrack = false, confirmationOpen = false)
         if (!canRead) return
@@ -203,9 +239,13 @@ class HostUpdateViewModel(
 
     fun leave() {
         generation++; job?.cancel(); job = null
-        original = null; scope = null; actionId = null
+        original = null; scope = null; actionId = null; statusReadFailure = null
         mutable.value = HostUpdateUiState()
     }
 
     override fun onCleared() { leave() }
+
+    private companion object {
+        val transientReadFailures = setOf(HostUpdateFailure.TIMEOUT, HostUpdateFailure.UNAVAILABLE)
+    }
 }
