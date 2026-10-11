@@ -86,7 +86,7 @@ fun BotChannelComposer(state: BotChannelUiState, ready: Boolean, onDraft: (Strin
 @Composable
 fun BotChannelScreen(state: BotChannelUiState, sessions: SessionsUiState, onBack: () -> Unit,
     onRefresh: () -> Unit, onOpen: (String) -> Unit,
-    locked: Boolean = false, onVisibleThreads: (List<String>) -> Unit = {},
+    locked: Boolean = false,
     currentTheme: AppThemePreference = AppThemePreference.SYSTEM, composer: @Composable () -> Unit = {},
     embedded: Boolean = false, onScrollPosition: (String, Int, Int, String?, String?) -> Unit = { _, _, _, _, _ -> }) {
     AtelierTheme(currentTheme) {
@@ -107,11 +107,6 @@ fun BotChannelScreen(state: BotChannelUiState, sessions: SessionsUiState, onBack
             if (name != null) snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
                 .collect { (index, offset) -> onScrollPosition(name, index, offset, state.connectionId, state.normalizedOrigin) }
         }
-        LaunchedEffect(state.channel, conversations, ready, sessions.isOfflineCache, sessions.error) {
-            snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }
-                .collect { onVisibleThreads(if (ready && !sessions.isOfflineCache && sessions.error == null) it.filter { id -> conversations.any { thread -> thread.id == id } } else emptyList()) }
-        }
-        DisposableEffect(state.channel) { onDispose { onVisibleThreads(emptyList()) } }
         Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = {
             if (!embedded) TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -145,8 +140,7 @@ fun BotChannelScreen(state: BotChannelUiState, sessions: SessionsUiState, onBack
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(28.dp, Alignment.Bottom)) {
                         items(conversations, key = { it.id }) { thread ->
-                            BotThreadPost(thread.threadPresentation(), state.displayName ?: state.channel.orEmpty(), state.avatar,
-                                state.threadReplies[thread.id]?.text, locked || !ready) { onOpen(thread.id) }
+                            BotThreadPost(thread.threadPresentation(), locked || !ready) { onOpen(thread.id) }
                         }
                     }
                 }
@@ -156,8 +150,7 @@ fun BotChannelScreen(state: BotChannelUiState, sessions: SessionsUiState, onBack
 }
 
 @Composable
-private fun BotThreadPost(thread: BotThreadPresentation, bot: String, avatar: BotAvatarAsset?,
-    reply: String?, locked: Boolean, onOpen: () -> Unit) {
+private fun BotThreadPost(thread: BotThreadPresentation, locked: Boolean, onOpen: () -> Unit) {
     val lineColor = MaterialTheme.colorScheme.outlineVariant
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -206,15 +199,6 @@ private fun BotThreadPost(thread: BotThreadPresentation, bot: String, avatar: Bo
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                     }
-                    if (reply != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            BotAvatar(avatar, 20.dp)
-                            Text(bot, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Text(reply, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    } else Text("Open conversation", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

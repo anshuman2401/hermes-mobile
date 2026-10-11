@@ -129,7 +129,6 @@ fun HermesNavShell(
     chatViewModelProvider: ((String) -> ChatViewModel)? = null,
     botsViewModelProvider: (() -> BotsViewModel)? = null,
     botScreenViewModelProvider: (() -> com.hermes.bot.feature.botscreen.BotScreenViewModel)? = null,
-    botThreadPreviewRepository: com.hermes.bot.data.context.BotThreadPreviewRepository? = null,
     hostInsightsViewModelProvider: (() -> com.hermes.bot.feature.settings.HostInsightsViewModel)? = null,
     hostUpdateViewModelProvider: (() -> com.hermes.bot.feature.settings.HostUpdateViewModel)? = null,
     debugLogsViewModel: DebugLogsViewModel? = null,
@@ -149,7 +148,7 @@ fun HermesNavShell(
     onForgetSavedLogin: (String) -> Unit = {}
 ) {
     val channelVm: BotChannelViewModel = viewModel(factory = viewModelFactory {
-        initializer { BotChannelViewModel(threadPreviewRepository = botThreadPreviewRepository) }
+        initializer { BotChannelViewModel() }
     })
     val channelState by channelVm.uiState.collectAsState()
     var botChat by rememberSaveable { mutableStateOf(false) }
@@ -604,9 +603,7 @@ fun HermesNavShell(
             BotChannelScreen(if (channelAdmitted) channelState else com.hermes.bot.feature.bots.BotChannelUiState(),
                 if (channelAdmitted) sessionsUiState else SessionsUiState(isLoading = true),
                 onBack = { channelVm.leaveChannel(); currentScreen = ShellScreen.SESSIONS; selectedTab = BottomNavTab.BOTS },
-                onRefresh = { channelVm.clearThreadPreviews(); sessionsViewModel?.refreshSessions() },
-                onVisibleThreads = { ids -> channelVm.showThreadPreviews(ids,
-                    currentChannelConnection() && isChannelListReady(channelState.channel, sessionsUiState) && !sessionsUiState.isOfflineCache && sessionsUiState.error == null) },
+                onRefresh = { sessionsViewModel?.refreshSessions() },
                 onOpen = { id ->
                     if (currentChannelConnection() && isChannelListReady(channelState.channel, sessionsUiState) && workspaceActionsAllowed()) {
                         activeChatSessionId = id
@@ -807,7 +804,7 @@ fun HermesNavShell(
                                         channel = channelState.channel.takeIf { channelState.connectionId == profilesUiState.activeProfileId && channelState.normalizedOrigin == savedTarget?.normalizedOrigin },
                                         conversationCount = botBoardConversations(sessionsUiState.sessions).size.takeIf { isChannelListVisible(channelState.channel, sessionsUiState) },
                                         channelContent = { BotBoardChannelContent() },
-                                        onRefreshChannel = { channelVm.clearThreadPreviews(); sessionsViewModel?.refreshSessions() },
+                                        onRefreshChannel = { sessionsViewModel?.refreshSessions() },
                                         onOpenScreen = { row -> openBotScreen(row.profile.name, row.profile.displayName) },
                                         onNavigateToSettings = { previousScreen = ShellScreen.SESSIONS; currentScreen = ShellScreen.SETTINGS },
                                         onSelect = { row ->
