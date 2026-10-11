@@ -58,14 +58,14 @@ class ChatQueueDeviceTest {
         compose.onAllNodes(hasSetTextAction()).onLast().performTextInput("Synthetic idle prompt")
         compose.onNodeWithContentDescription("Send prompt").assertIsDisplayed()
         compose.onNodeWithContentDescription("Add to queue").assertDoesNotExist()
-        compose.onNodeWithText("Queue · 0/10").assertDoesNotExist()
+        compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
         compose.onNodeWithText("Loading queue…").assertDoesNotExist()
     }
     @Test fun idlePendingQueueStaysHiddenUntilExplicitReview() {
         show(listOf(QueueItem(payload = QueuePayload.Prompt("Synthetic held prompt"))), streaming = false)
-        compose.onNodeWithText("1. Synthetic held prompt").assertDoesNotExist()
-        compose.onNodeWithText("Review queued messages (1)").performClick()
-        compose.onNodeWithText("1. Synthetic held prompt").assertIsDisplayed()
+        compose.onNodeWithText("Synthetic held prompt").assertDoesNotExist()
+        compose.onNodeWithText("Review queued messages").performClick()
+        compose.onNodeWithText("Synthetic held prompt").assertIsDisplayed()
         compose.onNodeWithContentDescription("Edit queued prompt 1").assertIsDisplayed()
         compose.onNodeWithContentDescription("Cancel queued item 1").performClick()
         compose.runOnIdle { assertTrue(model.uiState.value.queue.waiting.isEmpty()) }
@@ -73,21 +73,59 @@ class ChatQueueDeviceTest {
     @Test fun editablePromptAndCancelOnlyCommandAboveComposer() {
         val prompt = QueueItem(payload = QueuePayload.Prompt("Synthetic prompt"))
         show(listOf(prompt, QueueItem(payload = QueuePayload.Command(SlashInvocation("yolo", "on")))))
+        compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
+        compose.onNodeWithText("Queued messages").assertDoesNotExist()
+        compose.onNodeWithText("Runs in order").assertDoesNotExist()
         compose.onAllNodesWithContentDescription("Edit queued prompt 1").assertCountEquals(1)
         compose.onNodeWithContentDescription("Edit queued prompt 2").assertDoesNotExist()
-        val promptBounds = compose.onNodeWithText("1. Synthetic prompt").fetchSemanticsNode().boundsInRoot
+        val promptBounds = compose.onNodeWithText("Synthetic prompt").fetchSemanticsNode().boundsInRoot
         val editBounds = compose.onNodeWithContentDescription("Edit queued prompt 1").fetchSemanticsNode().boundsInRoot
         val cancelBounds = compose.onNodeWithContentDescription("Cancel queued item 1").fetchSemanticsNode().boundsInRoot
         assertTrue(editBounds.left >= promptBounds.right)
         assertTrue(cancelBounds.left >= editBounds.right)
         compose.onNodeWithContentDescription("Edit queued prompt 1").performScrollTo().performClick()
-        compose.onAllNodes(hasSetTextAction()).onFirst().performTextReplacement("Synthetic edited")
-        compose.onNodeWithText("Save").performScrollTo().performClick()
+        compose.onAllNodes(hasSetTextAction()).onLast().performTextReplacement("Synthetic edited")
+        compose.onNodeWithText("Save").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(prompt.id, model.uiState.value.queue.waiting.first().id)
             assertEquals("Synthetic edited", (model.uiState.value.queue.waiting.first().payload as QueuePayload.Prompt).text) }
         compose.onNodeWithContentDescription("Cancel queued item 2").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, model.uiState.value.queue.waiting.size) }
         compose.onNodeWithText("Stop generating").assertIsDisplayed()
+    }
+    @Test fun rejectedEditExplainsValidationInsideDialog() {
+        val prompt = QueueItem(payload = QueuePayload.Prompt("Synthetic original"))
+        show(listOf(prompt))
+        compose.onNodeWithContentDescription("Edit queued prompt 1").performClick()
+        compose.onAllNodes(hasSetTextAction()).onLast().performTextReplacement("/synthetic")
+        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithText("Enter a nonempty text prompt; commands cannot replace a queued prompt.").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(prompt.id, model.uiState.value.queue.edit?.id)
+            assertEquals("Synthetic original", (model.uiState.value.queue.waiting.single().payload as QueuePayload.Prompt).text) }
+        compose.onNodeWithText("Cancel edit").performClick()
+    }
+    @Test fun streamWithoutWaitingPromptsShowsNoPills() {
+        show()
+        compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
+        compose.onNodeWithText("Review queued messages").assertDoesNotExist()
+        compose.onNodeWithText("Stop generating").assertIsDisplayed()
+    }
+    @Test fun longPromptStaysAboveComposerAndCancelEditKeepsOriginal() {
+        val text = "Synthetic long prompt ".repeat(20)
+        show(listOf(QueueItem(payload = QueuePayload.Prompt(text))))
+        val edit = compose.onNodeWithContentDescription("Edit queued prompt 1")
+        val cancel = compose.onNodeWithContentDescription("Cancel queued item 1")
+        val editBounds = edit.fetchSemanticsNode().boundsInRoot
+        val cancelBounds = cancel.fetchSemanticsNode().boundsInRoot
+        edit.assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+        cancel.assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+        assertTrue(cancelBounds.left >= editBounds.right)
+        assertTrue(cancelBounds.bottom <= compose.onAllNodes(hasSetTextAction()).onLast().fetchSemanticsNode().boundsInRoot.top)
+        edit.performClick()
+        compose.onAllNodes(hasSetTextAction()).onLast().performTextReplacement("Synthetic discarded edit")
+        compose.onNodeWithText("Cancel edit").performClick()
+        compose.runOnIdle { assertEquals(text, (model.uiState.value.queue.waiting.single().payload as QueuePayload.Prompt).text) }
+        cancel.performClick()
+        compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
     }
     @Test fun queueWhileStreamingKeepsStopAccessibleWithKeyboardAndLargeFonts() {
         show(large = true, dark = true)
@@ -98,8 +136,8 @@ class ChatQueueDeviceTest {
         compose.onNodeWithText("Stop generating").assertIsDisplayed().performClick()
         compose.runOnIdle { assertFalse(model.uiState.value.isStreaming)
             assertNotNull(model.uiState.value.queue.pause); assertEquals(1, model.uiState.value.queue.waiting.size) }
-        compose.onNodeWithText("Queue · 1/10").assertDoesNotExist()
-        compose.onNodeWithText("Review queued messages (1)").performClick()
+        compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
+        compose.onNodeWithText("Review queued messages").performClick()
         compose.onNodeWithText("Resume queue").performScrollTo().assertIsDisplayed()
     }
 }

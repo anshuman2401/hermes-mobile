@@ -723,14 +723,14 @@ fun ChatScreen(
                         }
                     }
                     uiState?.let { state ->
+                        if (state.commandSuggestion != null) TextButton(onClick = { viewModel?.useCommandSuggestion() },
+                            enabled = state.composerDraft.isEmpty()) { Text("Use suggested text") }
                         com.hermes.bot.feature.chat.components.ChatQueuePresentation(state.queue, state.isStreaming, queueHeight,
                             onPause = { viewModel?.pauseQueue() }, onResume = { viewModel?.resumeQueue() },
                             onCancel = { viewModel?.cancelQueuedItem(it) }, onEdit = { viewModel?.editQueuedItem(it) },
                             onEditText = { viewModel?.updateQueuedEdit(it) }, onFinishEdit = { viewModel?.finishQueuedEdit(it) },
                             onCheck = { viewModel?.checkQueueStatus() }, onDismiss = { viewModel?.dismissQueuedOutcome() },
                             onRetry = { viewModel?.retryQueuedItem() })
-                        if (state.commandSuggestion != null) TextButton(onClick = { viewModel?.useCommandSuggestion() },
-                            enabled = state.composerDraft.isEmpty()) { Text("Use suggested text") }
                     }
                     ChatComposer(
                         queueEnabled = uiState?.queuesComposerInput == true && uiState.pendingImages.isEmpty() && uiState.pendingFiles.isEmpty(),

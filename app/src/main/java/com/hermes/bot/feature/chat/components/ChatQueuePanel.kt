@@ -1,12 +1,16 @@
 package com.hermes.bot.feature.chat.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.List
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,19 +26,58 @@ fun ChatQueuePresentation(state: ChatQueueState, isStreaming: Boolean, maxHeight
     onDismiss: () -> Unit, onRetry: () -> Unit) {
     var reviewing by remember { mutableStateOf(false) }
     LaunchedEffect(state.visible, isStreaming) { if (!state.visible || isStreaming) reviewing = false }
-    if (isStreaming) {
-        ChatQueuePanel(state, maxHeight, onPause, onResume, onCancel, onEdit, onEditText,
-            onFinishEdit, onCheck, onDismiss, onRetry)
-    } else if (state.visible) {
-        TextButton(onClick = { reviewing = true }) {
-            Text(if (state.waiting.isEmpty() && state.active == null) "Review queue status"
-                else "Review queued messages (${state.waiting.size + if (state.active != null) 1 else 0})")
+    if (isStreaming && state.waiting.isNotEmpty()) {
+        Column(Modifier.fillMaxWidth().heightIn(max = maxHeight.coerceAtLeast(64.dp))
+            .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("queued-prompt-pills"), horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            state.waiting.forEachIndexed { index, item ->
+                Surface(shape = RoundedCornerShape(28.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shadowElevation = 1.dp) {
+                    Row(Modifier.widthIn(max = 360.dp).padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.List, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(preview(item), modifier = Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        if (item.payload is QueuePayload.Prompt) IconButton(
+                            onClick = { onEdit(item.id) }, enabled = state.edit == null, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit queued prompt ${index + 1}")
+                        }
+                        IconButton(onClick = { onCancel(item.id) }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel queued item ${index + 1}")
+                        }
+                    }
+                }
+            }
         }
-        if (reviewing) AlertDialog(onDismissRequest = { reviewing = false },
-            confirmButton = { TextButton(onClick = { reviewing = false }) { Text("Close") } },
-            text = { ChatQueuePanel(state, maxHeight, onPause, onResume, onCancel, onEdit, onEditText,
-                onFinishEdit, onCheck, onDismiss, onRetry) })
     }
+    // Held intent and uncertain writes still need explicit recovery; normal streaming
+    // exposes only waiting pills, never the active turn or a queue status panel.
+    val needsReview = state.visible && (!isStreaming || state.error != null ||
+        state.pause != null && state.pause != QueuePause.EDITING)
+    if (needsReview) {
+        TextButton(onClick = { reviewing = true }) { Text("Review queued messages") }
+    }
+    if (reviewing && state.visible) AlertDialog(onDismissRequest = { reviewing = false },
+        confirmButton = { TextButton(onClick = { reviewing = false }) { Text("Close") } },
+        text = { ChatQueuePanel(state, maxHeight, onPause, onResume, onCancel, onEdit, onEditText,
+            onFinishEdit, onCheck, onDismiss, onRetry) })
+    if (!reviewing && state.edit != null) AlertDialog(
+        onDismissRequest = { onFinishEdit(false) },
+        title = { Text("Edit queued prompt") },
+        text = { Column {
+            OutlinedTextField(value = state.edit.text, onValueChange = onEditText,
+                modifier = Modifier.fillMaxWidth(), maxLines = 6)
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        } },
+        confirmButton = { TextButton(onClick = { onFinishEdit(true) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = { onFinishEdit(false) }) { Text("Cancel edit") } })
+
 }
 
 @Composable
@@ -45,7 +88,7 @@ fun ChatQueuePanel(state: ChatQueueState, maxHeight: Dp, onPause: () -> Unit, on
     Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.heightIn(max = maxHeight.coerceAtLeast(1.dp)).verticalScroll(rememberScrollState()).padding(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Queue · ${state.waiting.size}/10", style = MaterialTheme.typography.titleSmall)
+                Text("Queued messages", style = MaterialTheme.typography.titleSmall)
                 TextButton(onClick = if (state.pause == null) onPause else onResume,
                     enabled = state.edit == null && state.active?.state !in setOf(QueueItemState.FAILED, QueueItemState.UNKNOWN, QueueItemState.CONFIRMING)) {
                     Text(if (state.pause == null) "Pause" else "Resume queue")
@@ -86,7 +129,7 @@ fun ChatQueuePanel(state: ChatQueueState, maxHeight: Dp, onPause: () -> Unit, on
                     }
                 } else {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${index + 1}. ${preview(item)}", modifier = Modifier.weight(1f),
+                        Text(preview(item), modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         if (item.payload is QueuePayload.Prompt) IconButton(onClick = { onEdit(item.id) }, enabled = state.edit == null) {
                             Icon(Icons.Default.Edit, contentDescription = "Edit queued prompt ${index + 1}")
