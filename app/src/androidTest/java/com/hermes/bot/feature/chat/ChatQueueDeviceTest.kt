@@ -26,10 +26,11 @@ class ChatQueueDeviceTest {
         override suspend fun write(state: ChatQueueState): Boolean { saved = state; return true }
         override suspend fun isCurrent() = true
     }
-    private fun show(items: List<QueueItem> = emptyList(), large: Boolean = false, dark: Boolean = false, streaming: Boolean = true) {
+    private fun show(items: List<QueueItem> = emptyList(), large: Boolean = false, dark: Boolean = false,
+        streaming: Boolean = true, active: QueueItem? = null) {
         compose.runOnUiThread {
             compose.activity.window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-            model = ChatViewModel("synthetic-chat", chatQueueStore = Store(ChatQueueState(waiting = items)))
+            model = ChatViewModel("synthetic-chat", chatQueueStore = Store(ChatQueueState(waiting = items, active = active)))
             val field = ChatViewModel::class.java.getDeclaredField("_uiState").apply { isAccessible = true }
             @Suppress("UNCHECKED_CAST") val state = field.get(model) as MutableStateFlow<ChatUiState>
             state.value = model.uiState.value.copy(durableSessionId = "synthetic-chat", runtimeSessionId = "synthetic-runtime",
@@ -61,14 +62,23 @@ class ChatQueueDeviceTest {
         compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
         compose.onNodeWithText("Loading queue…").assertDoesNotExist()
     }
-    @Test fun idlePendingQueueStaysHiddenUntilExplicitReview() {
+    @Test fun restoredWaitingQueueStaysInlineWithExplicitResume() {
         show(listOf(QueueItem(payload = QueuePayload.Prompt("Synthetic held prompt"))), streaming = false)
-        compose.onNodeWithText("Synthetic held prompt").assertDoesNotExist()
-        compose.onNodeWithText("Review queued messages").performClick()
+        compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
         compose.onNodeWithText("Synthetic held prompt").assertIsDisplayed()
+        compose.onNodeWithText("Resume queue").assertIsDisplayed()
+        compose.onNodeWithText("Review queued messages").assertDoesNotExist()
+        compose.onNodeWithText("Queued messages").assertDoesNotExist()
+        compose.onNodeWithText("Paused · restored queue").assertDoesNotExist()
+        // This screen fixture has no gateway; its disconnect observer may also
+        // pause restored work. Neither state may dispatch it automatically.
+        compose.runOnIdle { assertNotNull(model.uiState.value.queue.pause)
+            assertNull(model.uiState.value.queue.active) }
         compose.onNodeWithContentDescription("Edit queued prompt 1").assertIsDisplayed()
         compose.onNodeWithContentDescription("Cancel queued item 1").performClick()
         compose.runOnIdle { assertTrue(model.uiState.value.queue.waiting.isEmpty()) }
+        compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
+        compose.onNodeWithText("Resume queue").assertDoesNotExist()
     }
     @Test fun editablePromptAndCancelOnlyCommandAboveComposer() {
         val prompt = QueueItem(payload = QueuePayload.Prompt("Synthetic prompt"))
@@ -91,6 +101,20 @@ class ChatQueueDeviceTest {
         compose.onNodeWithContentDescription("Cancel queued item 2").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, model.uiState.value.queue.waiting.size) }
         compose.onNodeWithText("Stop generating").assertIsDisplayed()
+    }
+    @Test fun uncertainActiveSubmissionKeepsExplicitReviewWithInlineWaitingPrompt() {
+        show(listOf(QueueItem(payload = QueuePayload.Prompt("Synthetic waiting prompt"))), streaming = false,
+            active = QueueItem(payload = QueuePayload.Prompt("Synthetic uncertain prompt"), state = QueueItemState.STREAMING))
+        compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
+        compose.onNodeWithText("Synthetic waiting prompt").assertIsDisplayed()
+        compose.onNodeWithText("Resume queue").assertDoesNotExist()
+        compose.onNodeWithText("Review queued messages").performClick()
+        compose.onNodeWithText("Outcome unknown · Synthetic uncertain prompt").assertIsDisplayed()
+        compose.onNodeWithText("Check status").assertIsDisplayed()
+        compose.onNodeWithText("Dismiss").assertIsDisplayed()
+        compose.onNodeWithText("Retry").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(QueueItemState.UNKNOWN, model.uiState.value.queue.active?.state)
+            assertEquals(1, model.uiState.value.queue.waiting.size) }
     }
     @Test fun rejectedEditExplainsValidationInsideDialog() {
         val prompt = QueueItem(payload = QueuePayload.Prompt("Synthetic original"))
@@ -136,8 +160,9 @@ class ChatQueueDeviceTest {
         compose.onNodeWithText("Stop generating").assertIsDisplayed().performClick()
         compose.runOnIdle { assertFalse(model.uiState.value.isStreaming)
             assertNotNull(model.uiState.value.queue.pause); assertEquals(1, model.uiState.value.queue.waiting.size) }
-        compose.onNodeWithTag("queued-prompt-pills").assertDoesNotExist()
-        compose.onNodeWithText("Review queued messages").performClick()
-        compose.onNodeWithText("Resume queue").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
+        compose.onNodeWithText("Synthetic new prompt").assertIsDisplayed()
+        compose.onNodeWithText("Resume queue").assertIsDisplayed()
+        compose.onNodeWithText("Review queued messages").assertDoesNotExist()
     }
 }
