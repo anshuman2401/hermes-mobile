@@ -5,6 +5,9 @@ import androidx.activity.compose.BackHandler
 import com.hermes.bot.feature.work.WorkCronsViewModel
 import com.hermes.bot.feature.work.WorkScreen
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
+import com.hermes.bot.feature.connect.ConnectAtelierTheme
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -623,43 +626,45 @@ fun HermesNavShell(
             ShellScreen.CONNECT -> {
                 // Connect fills the screen. Workspace and settings controls
                 // become available only after a compatible connection.
-                Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-                    ConnectScreen(
-                        uiState = connectUiState,
-                        onHostChanged = onHostChanged,
-                        onServerNameChanged = onServerNameChanged,
-                        onPortChanged = onPortChanged,
-                        onTestConnection = onTestConnection,
-                        onAuthenticate = onAuthenticate,
-                        onUsernameChanged = onUsernameChanged,
-                        onPasswordChanged = onPasswordChanged,
-                        onLogin = onLogin,
-                        onOpenSessions = {
-                            onOpenSessions()
-                            currentScreen = ShellScreen.SESSIONS
-                        },
-                        onRetry = onRetry,
-                        onToggleDiagnostics = onToggleDiagnostics,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    if (isConnected) {
-                        Row(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 8.dp, end = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    previousScreen = ShellScreen.CONNECT
-                                    currentScreen = ShellScreen.SETTINGS
-                                },
-                                modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                ConnectAtelierTheme(themePreference) {
+                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+                        ConnectScreen(
+                            uiState = connectUiState,
+                            onHostChanged = onHostChanged,
+                            onServerNameChanged = onServerNameChanged,
+                            onPortChanged = onPortChanged,
+                            onTestConnection = onTestConnection,
+                            onAuthenticate = onAuthenticate,
+                            onUsernameChanged = onUsernameChanged,
+                            onPasswordChanged = onPasswordChanged,
+                            onLogin = onLogin,
+                            onOpenSessions = {
+                                onOpenSessions()
+                                currentScreen = ShellScreen.SESSIONS
+                            },
+                            onRetry = onRetry,
+                            onToggleDiagnostics = onToggleDiagnostics,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        if (isConnected) {
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 8.dp, end = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = "Open appearance settings"
-                                )
+                                IconButton(
+                                    onClick = {
+                                        previousScreen = ShellScreen.CONNECT
+                                        currentScreen = ShellScreen.SETTINGS
+                                    },
+                                    modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = "Open appearance settings"
+                                    )
+                                }
                             }
                         }
                     }

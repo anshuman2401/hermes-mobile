@@ -29,14 +29,19 @@ class ThemeAndContrastTest {
 
     @Test
     fun connectFilledFields_textAndBoundaryPairsMeetFloorsInBothResolvedThemes() {
-        for ((name, scheme, extended) in listOf(
-            Triple("light", lightScheme(), LightExtendedColors),
-            Triple("dark", darkScheme(), DarkExtendedColors)
-        )) {
+        for ((name, palette) in listOf("light" to AtelierLight, "dark" to AtelierDark)) {
+            val scheme = com.hermes.bot.feature.connect.connectAtelierColors(
+                lightScheme().copy(
+                    surface = palette.canvas, surfaceContainer = palette.panel,
+                    onSurface = palette.ink, onSurfaceVariant = palette.muted,
+                    primary = palette.accent, onPrimary = palette.canvas,
+                    error = palette.destructive
+                )
+            )
             for ((role, foreground) in listOf(
                 "value" to scheme.onSurface,
                 "placeholder and neutral boundary" to scheme.onSurfaceVariant,
-                "focus boundary and cursor" to extended.primaryText,
+                "focus boundary and cursor" to scheme.primary,
                 "error boundary" to scheme.error
             )) {
                 val ratio = calculateContrastRatio(foreground, scheme.surfaceContainer)
@@ -45,6 +50,8 @@ class ThemeAndContrastTest {
                 val canvasRatio = calculateContrastRatio(foreground, scheme.surface)
                 assertTrue("$name Connect $role against canvas $canvasRatio < 3", canvasRatio >= 3)
             }
+            val actionRatio = calculateContrastRatio(scheme.onPrimary, scheme.primary)
+            assertTrue("$name Connect action text $actionRatio < 4.5", actionRatio >= 4.5)
         }
     }
 
