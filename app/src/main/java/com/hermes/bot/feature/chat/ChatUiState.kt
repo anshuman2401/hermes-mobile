@@ -81,15 +81,19 @@ data class ChatUiState(
     val approvals: com.hermes.bot.data.approval.ApprovalState = com.hermes.bot.data.approval.ApprovalState(),
     /**
      * PR-3 (plan CACHE-PR3 §6): wall clock of the last resume capture shown
-     * as an OFFLINE saved snapshot, or null while the surface shows
-     * authoritative/live state. Non-null ⇒ ChatScreen renders the
-     * 'Saved snapshot — offline' strip (instead of the restore notice) and
-     * the empty-state branch; cleared on loadSession entry and by every live
+     * as a cached snapshot, or null while the surface shows
+     * authoritative/live state. Outside an owned background preview, non-null
+     * renders the 'Saved snapshot — offline' strip and the empty-state branch;
+     * cleared on loadSession entry and by every live
      * resume success (replace semantics, REQ-10). Also gates
      * isComposerReady below (SEC-03), so Send stays disabled while shown;
      * runtimeSessionId is never derived from it (REQ-09).
      */
     val savedSnapshotCapturedAtMillis: Long? = null,
+    /** Temporary cache projection while the owned host read runs; never authorizes actions. */
+    val isCachedHistoryPreview: Boolean = false,
+    /** Covers both host hydration lanes, including the interval after the first rows arrive. */
+    val isHistoryReadInFlight: Boolean = false,
     val composerDraft: String = "",
     val edit: MessageEditState? = null,
     val unknownEditId: String? = null,
@@ -203,7 +207,9 @@ data class ChatUiState(
 ) {
     /** Loading gates actions even when an already displayed transcript remains readable. */
     val showInitialLoading: Boolean get() = isInitialLoading && timeline.isEmpty()
-    val showHistoryRefresh: Boolean get() = isRefreshing || (isInitialLoading && timeline.isNotEmpty())
+    val showHistoryRefresh: Boolean get() = isRefreshing || (showHistoryLoading && timeline.isNotEmpty())
+    val showHistoryLoading: Boolean get() = isInitialLoading && !isCachedHistoryPreview
+    val showSavedSnapshot: Boolean get() = savedSnapshotCapturedAtMillis != null && !isCachedHistoryPreview
 
     /**
      * CHAT-004 (frozen plan TASK-008): REACHED = the rendered window already
@@ -315,6 +321,7 @@ data class ChatUiState(
 
     val attachmentDisabledReason: String?
         get() = when {
+            isCachedHistoryPreview -> null
             savedSnapshotCapturedAtMillis != null -> "Reconnect to add attachments to this saved snapshot."
             runtimeSessionId.isNullOrBlank() || submitBlockedReason == SubmitBlockedReason.NO_RUNTIME ->
                 null

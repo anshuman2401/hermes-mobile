@@ -118,6 +118,7 @@ internal data class ChatRestoreNotice(val message: String, val action: String, v
 /** Keep an attached, running turn distinct from a missing runtime attachment. */
 internal object ChatRestoreNoticePolicy {
     fun forState(state: ChatUiState?): ChatRestoreNotice? {
+        if (state?.isCachedHistoryPreview == true || state?.isHistoryReadInFlight == true) return null
         if (state?.submitBlockedReason != SubmitBlockedReason.NO_RUNTIME) return null
         if (state.runtimeSessionId.isNullOrBlank()) return ChatRestoreNotice(
             NO_RUNTIME_NOTICE_TEXT, NO_RUNTIME_ACTION_LABEL, NO_RUNTIME_SEMANTICS
@@ -916,8 +917,8 @@ fun ChatScreen(
                     }
                 }
             }
-            if (recoveryState == com.hermes.bot.feature.connect.ConnectState.PREFLIGHT_LOADING ||
-                uiState?.isInitialLoading == true) {
+            if ((recoveryState == com.hermes.bot.feature.connect.ConnectState.PREFLIGHT_LOADING ||
+                uiState?.showHistoryLoading == true) && uiState?.isCachedHistoryPreview != true) {
                 androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text(if (recoveryState == com.hermes.bot.feature.connect.ConnectState.PREFLIGHT_LOADING) "Connecting…" else "Syncing…",
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp))
@@ -995,7 +996,7 @@ fun ChatScreen(
             // PR-3 (REQ-09): the surface currently renders an OFFLINE SAVED
             // SNAPSHOT — label it explicitly. Deliberately non-interactive: the
             // snapshot path never arms NO_RUNTIME, which is the PR-7 lane's job.
-            if (uiState?.savedSnapshotCapturedAtMillis != null && !showInitialLoading) {
+            if (uiState?.showSavedSnapshot == true && !showInitialLoading) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

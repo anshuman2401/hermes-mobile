@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import com.hermes.bot.data.context.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
@@ -1927,6 +1928,7 @@ class ChatViewModel(
         _uiState.update { current ->
             current.copy(
                 isInitialLoading = if (manual) current.isInitialLoading else true,
+                isHistoryReadInFlight = true,
                 isRefreshing = manual,
                 isLoadingEarlier = false,
                 storedHistoryEarlierAvailable = if (storedHistoryScope != null || storedWindow != null) false else null,
@@ -1938,6 +1940,8 @@ class ChatViewModel(
                 isAttachingFile = false,
                 attachmentErrorMessage = null,
                 savedSnapshotCapturedAtMillis = if (reconnectReplace) current.savedSnapshotCapturedAtMillis else null,
+                isCachedHistoryPreview = reconnectReplace && current.savedSnapshotCapturedAtMillis != null &&
+                    gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED,
                 cachedToolTrace = emptyList(),
                 taskProgress = if (manual || recovery) current.taskProgress.copy(live = false) else TaskProgressState(),
                 hasAcceptedStoredHistory = if (recovery || manual) current.hasAcceptedStoredHistory else false,
@@ -1979,7 +1983,31 @@ class ChatViewModel(
             }
             if (historyDisposed || generation != historyGeneration) return@launch
             if (scope != null) {
-                openActiveHistory(repo, scope, generation, previousScope, previousSocketGeneration, recovery || manual, manual, admittedSocket)
+                coroutineScope {
+                    // Cache and host reads are siblings. A late cache cannot replace any host publication.
+                    val preview = launch {
+                        try {
+                            if (!manual && !recovery && _uiState.value.timeline.isEmpty() &&
+                                gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED) {
+                                val previewBudget = StoredHistoryBudget(scope)
+                                serveConversationSnapshotIfPresent(sessionId, scope.lease, scope.selectedContext,
+                                    preview = true) {
+                                    !historyDisposed && generation == historyGeneration && scope.current &&
+                                        _uiState.value.isInitialLoading && repo.isStoredHistoryPublicationCurrent(scope, previewBudget) &&
+                                        !historyDisposed && generation == historyGeneration && _uiState.value.isInitialLoading &&
+                                        admittedSocket == gatewayProtocolAdapter?.connectionGeneration &&
+                                        gatewayProtocolAdapter?.connectionStatus?.value == ConnectionStatus.CONNECTED
+                                }
+                            }
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { /* Cache failures never cancel the host read. */ }
+                    }
+                    try {
+                        openActiveHistory(repo, scope, generation, previousScope, previousSocketGeneration, recovery || manual, manual, admittedSocket)
+                    } finally {
+                        preview.cancel()
+                    }
+                }
                 return@launch
             }
             val resumeResult = try { repo.resumeSession(sessionId) }
@@ -2062,6 +2090,7 @@ class ChatViewModel(
                         // PR-3 (REQ-10): a successful remote resume atomically
                         // REPLACES the saved snapshot — the label clears.
                         savedSnapshotCapturedAtMillis = null,
+                        isCachedHistoryPreview = false,
                         hasAcceptedStoredHistory = false,
                         isInitialLoading = false,
                         errorMessage = null,
@@ -2149,7 +2178,12 @@ class ChatViewModel(
             }
         }
         historyLoadJob = read
-        read.invokeOnCompletion { failure -> if (firstChannelRead && failure != null) channelInitialRead.complete(false) }
+        read.invokeOnCompletion { failure ->
+            if (!historyDisposed && generation == historyGeneration) {
+                _uiState.update { it.copy(isCachedHistoryPreview = false, isHistoryReadInFlight = false) }
+            }
+            if (firstChannelRead && failure != null) channelInitialRead.complete(false)
+        }
         // The operation includes both sibling lanes and seed completion, not early REST loading state.
         viewModelScope.launch {
             read.join()
@@ -2415,7 +2449,9 @@ class ChatViewModel(
                 ActiveHistoryFold.overlay(base, emptyList(), optimistic), retainedOpen, currentPresentation)
                 else localSnapshot
             var next = if (data != null && hasProjection) activeProjectionGroups(data, base, compactGroups(data))
-                else postRest ?: base
+                else postRest ?: if (preserveOpen && refresh && previousRows.isNotEmpty())
+                    // An unavailable REST lane cannot erase previously accepted compact host messages.
+                    ActiveHistoryFold.overlay(base, emptyList(), retainedOpen.filter { it.sourceKind == ActiveSourceKind.COMPACT }) else base
             if (data == null && postRest == null) {
                 val optimistic = ActiveHistoryFold.removeRepresentedTail(base, retainedOpen).filter {
                     it.sourceKind != ActiveSourceKind.STORED && it.sourceKind != ActiveSourceKind.COMPACT
@@ -2468,7 +2504,7 @@ class ChatViewModel(
                 timeline = next.flatMap { it.parts }, isInitialLoading = false,
                 runtimeSessionId = data?.runtimeSessionId ?: if (attached || (preserveRuntime && socketGeneration == gatewayProtocolAdapter?.connectionGeneration)) state.runtimeSessionId else null,
                 durableSessionId = data?.durableSessionId ?: state.durableSessionId,
-                savedSnapshotCapturedAtMillis = null, errorMessage = storedNotice,
+                savedSnapshotCapturedAtMillis = null, isCachedHistoryPreview = false, errorMessage = storedNotice,
                 hasAcceptedStoredHistory = storedPublication || (storedGroups != null && state.hasAcceptedStoredHistory),
                 sessionTitle = if (data == null) state.sessionTitle else state.sessionTitle?.takeUnless {
                     it.isBlank() || it == UNTITLED_CONVERSATION_HEADER_LABEL
@@ -2742,6 +2778,7 @@ class ChatViewModel(
                 timeline = historyEntries,
                 taskProgress = TaskProgressState.restore(data.taskSnapshot, data.activityEvidence == ResumeActivityEvidence.RUNNING),
                 savedSnapshotCapturedAtMillis = null,
+                isCachedHistoryPreview = false,
                 cachedToolTrace = emptyList(),
                 hasAcceptedStoredHistory = false,
                 isRefreshing = false,
@@ -2769,7 +2806,9 @@ class ChatViewModel(
     }
 
     /**
-     * PR-3 (REQ-09): serve the offline snapshot into presentation state.
+     * Serve a snapshot into presentation state, optionally as a quiet preview
+     * while the same scoped operation reads host history. Preview keeps the
+     * loading/action gate armed and requires its caller's publication guard.
      * Returns false when nothing readable — the caller falls through to the
      * live resume. Invariants: runtimeSessionId is NEVER restored from cache
      * (stays null), submitBlockedReason stays null (never NO_RUNTIME on this
@@ -2778,6 +2817,7 @@ class ChatViewModel(
      */
     private suspend fun serveConversationSnapshotIfPresent(durableId: String,
         expected: com.hermes.bot.data.local.AuthCredentialLease? = null, selectedContext: String? = null,
+        preview: Boolean = false,
         current: suspend () -> Boolean = { true }): Boolean {
         val cacheRepo = conversationCacheRepository ?: return false
         if (!current()) return false
@@ -2809,10 +2849,11 @@ class ChatViewModel(
                 mapHistoryMessageToEntries(msg, index, prefix = "hist") { skippedBlanks++ }
             }
             .flatten()
+        if (preview && snapshotEntries.isEmpty()) return false
         // Plan §6 title chain (repair finding 3): state title → ACTIVE-HANDLE
         // title → friendly label — resolved OUTSIDE update{} because it suspends.
         val activeHandleTitle = try {
-            sessionRepository?.getActiveSession()?.title
+            sessionRepository?.getActiveSession()?.takeIf { it.storedSessionId == durableId }?.title
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (_: Exception) {
@@ -2835,6 +2876,7 @@ class ChatViewModel(
                 // PR-3 (§6): strip flag carries the capture time while the
                 // surface renders this offline copy.
                 savedSnapshotCapturedAtMillis = snapshotCache.capturedAtMillis,
+                isCachedHistoryPreview = preview,
                 hasAcceptedStoredHistory = false,
                 // PR-4 (§6): fallback/cache-first projection — the
                 // phone-captured group renders with the served rows from
@@ -2842,7 +2884,7 @@ class ChatViewModel(
                 cachedToolTrace = ExecutionTracePolicy.buildCachedToolTraceEntryList(
                     snapshotCache.localTrace
                 ),
-                isInitialLoading = false,
+                isInitialLoading = preview,
                 errorMessage = null,
                 // Never NO_RUNTIME on the snapshot path (PR-7 lane untouched).
                 submitBlockedReason = null,

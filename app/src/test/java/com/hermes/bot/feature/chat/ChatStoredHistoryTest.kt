@@ -543,16 +543,22 @@ internal class StoredChatFixture(folder: File, private val dispatcher: Coroutine
     suspend fun scope(profile: String = "default") = repository.captureStoredHistoryScope("synthetic-local", origin,
         profile, "synthetic-session", 11, 17).getOrThrow()
     fun resumeBody() = """{"session_id":"synthetic-runtime","stored_session_id":"synthetic-session","message_count":3,"messages":[{"role":"user","content":"Synthetic compact question"},{"role":"tool","content":"SYNTHETIC_PRIVATE_COMPACT_OUTPUT","name":"terminal","context":"SYNTHETIC_PRIVATE_COMPACT_ARGUMENT"},{"role":"assistant","content":"Synthetic compact answer"}]${if (metadata.isEmpty()) "" else ",$metadata"}}"""
-    fun vm(storage: VaultStorage = vault, repo: com.hermes.bot.data.session.SessionRepository = repository): ChatViewModel = ChatViewModel("synthetic-session", sessionRepository = repo,
-        gatewayProtocolAdapter = gateway, vaultStorage = storage, conversationCacheRepository = cache).also {
+    fun vm(storage: VaultStorage = vault, repo: com.hermes.bot.data.session.SessionRepository = repository,
+        cacheRepository: com.hermes.bot.data.cache.ConversationCacheRepository = cache): ChatViewModel = ChatViewModel("synthetic-session", sessionRepository = repo,
+        gatewayProtocolAdapter = gateway, vaultStorage = storage, conversationCacheRepository = cacheRepository).also {
         vmJobs.add(it.viewModelScope.coroutineContext[Job]!!)
         store.put("synthetic-${vmCount++}", it)
     }
     suspend fun awaitLoaded(vm: ChatViewModel) {
+        awaitHistoryRead(vm)
+        withContext(Dispatchers.Default) { withTimeout(5000) {
+            vm.uiState.first { !it.isInitialLoading }
+        } }
+    }
+    suspend fun awaitHistoryRead(vm: ChatViewModel) {
         withContext(Dispatchers.Default) { withTimeout(5000) {
             val field = ChatViewModel::class.java.getDeclaredField("historyLoadJob").apply { isAccessible = true }
             (field.get(vm) as Job).join()
-            vm.uiState.first { !it.isInitialLoading }
         } }
     }
     suspend fun assertNoResumeEffects() {
