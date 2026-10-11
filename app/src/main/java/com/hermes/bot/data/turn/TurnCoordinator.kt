@@ -150,6 +150,25 @@ class TurnCoordinator(
         }
     }
 
+    /** Completion recovery for a specific admitted attempt; never retries an unknown write. */
+    suspend fun reconcileCompletedQueueTurn(
+        pendingTurnId: String,
+        storedSessionId: String,
+        messages: List<SessionMessage>,
+        activity: com.hermes.bot.data.gateway.ResumeActivityEvidence
+    ): Boolean {
+        if (activity != com.hermes.bot.data.gateway.ResumeActivityEvidence.NON_RUNNING) return false
+        val turn = pendingTurnLedger.getPendingTurn(pendingTurnId) ?: return false
+        if (turn.storedSessionId != storedSessionId || turn.edit != null ||
+            turn.state != PendingTurnState.CONFIRMED_ADMITTED) return false
+        val index = messages.indexOfLast {
+            it.role.equals("user", true) && it.content.trim() == turn.promptContent.trim()
+        }
+        if (index < 0 || messages.drop(index + 1).takeWhile { !it.role.equals("user", true) }
+                .none { it.role.equals("assistant", true) && it.content.isNotBlank() }) return false
+        return true
+    }
+
     /**
      * Reconciles any active or ambiguous pending turns against server-authoritative history.
      * If the prompt content appears in server messages, the turn is proven admitted and resolved.

@@ -44,6 +44,29 @@ class QueuedPromptAuthorityTest {
         }
     }
 
+    @Test fun completionRecoveryRequiresAdmissionIdleReplyAndCorrectSession() = runTest {
+        val vault = EncryptedVault(temp.newFolder(), AesGcmCipherEngine(InMemoryMasterKeyProvider()), ioDispatcher = Dispatchers.Unconfined)
+        val ledger = PendingTurnLedger(vault)
+        val adapter = FakeGatewayProtocolAdapter()
+        val coordinator = TurnCoordinator(adapter, ledger)
+        val turn = ledger.prepareTurn("synthetic-session", "Synthetic prompt", "synthetic-runtime")
+        val messages = listOf(com.hermes.bot.data.gateway.SessionMessage("user", "Synthetic prompt"),
+            com.hermes.bot.data.gateway.SessionMessage("assistant", "Synthetic reply"))
+        val idle = com.hermes.bot.data.gateway.ResumeActivityEvidence.NON_RUNNING
+        ledger.markUnknown(turn.pendingTurnId)
+        assertFalse(coordinator.reconcileCompletedQueueTurn(turn.pendingTurnId, "synthetic-session", messages, idle))
+        ledger.markConfirmedAdmitted(turn.pendingTurnId)
+        assertFalse(coordinator.reconcileCompletedQueueTurn(turn.pendingTurnId, "other-session", messages, idle))
+        assertFalse(coordinator.reconcileCompletedQueueTurn(turn.pendingTurnId, "synthetic-session", messages.take(1), idle))
+        assertFalse(coordinator.reconcileCompletedQueueTurn(turn.pendingTurnId, "synthetic-session", messages,
+            com.hermes.bot.data.gateway.ResumeActivityEvidence.RUNNING))
+        assertFalse(coordinator.reconcileCompletedQueueTurn(turn.pendingTurnId, "synthetic-session", messages,
+            com.hermes.bot.data.gateway.ResumeActivityEvidence.UNKNOWN))
+        assertTrue(coordinator.reconcileCompletedQueueTurn(turn.pendingTurnId, "synthetic-session", messages, idle))
+        assertEquals(PendingTurnState.CONFIRMED_ADMITTED, ledger.getPendingTurn(turn.pendingTurnId)?.state)
+        assertEquals(0, adapter.submitPromptCallCount)
+    }
+
     @Test fun missingCapturedQueueAuthorityFailsClosedWithoutPreparingOrWriting() = runTest {
         val vault = EncryptedVault(temp.newFolder(), AesGcmCipherEngine(InMemoryMasterKeyProvider()), ioDispatcher = Dispatchers.Unconfined)
         val ledger = PendingTurnLedger(vault); val adapter = FakeGatewayProtocolAdapter()

@@ -803,7 +803,8 @@ class ChatViewModel(
                     if (it.queue.loaded && it.headerConnectionStatus != ConnectionStatus.CONNECTED &&
                         (it.queue.waiting.isNotEmpty() || it.queue.active != null)) {
                         queueRequiresIdle = true
-                        queue.pause(QueuePause.DISCONNECTED)
+                        if (queue.state.value.pause in setOf(null, QueuePause.UNKNOWN, QueuePause.DISCONNECTED))
+                            queue.pause(QueuePause.DISCONNECTED)
                         // A settled local stream loses terminal certainty on disconnect.
                         // Let its owning execution finish as unknown; never resend it.
                         if (!it.isSubmitting) queueTurnCompletion?.complete(QueueExecutionResult.UNKNOWN)
@@ -885,6 +886,35 @@ class ChatViewModel(
         queueRequiresIdle = false
         return true
     }
+    private suspend fun reconcileQueueAfterHistory(data: SessionResumeResult, current: suspend () -> Boolean) {
+        val queue = chatQueue ?: return
+        val active = queue.state.value.active
+        val pending = active?.pendingTurnId ?: activeTurnId ?: _uiState.value.pendingUnknownTurnId
+        if (!current() || !queueForeground || data.durableSessionId != currentDurableSessionId() ||
+            data.runtimeSessionId != _uiState.value.runtimeSessionId ||
+            data.activityEvidence != ResumeActivityEvidence.NON_RUNNING) return
+        if (pending != null) {
+            if (coordinator?.reconcileCompletedQueueTurn(pending, data.durableSessionId, data.messages,
+                    data.activityEvidence) != true || !current()) return
+            if (active != null && !queue.resolveCompletedPrompt(active.id)) return
+            try { coordinator?.markResolved(pending) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { queue.pause(QueuePause.STORAGE); return }
+            if (!current() || !queueForeground || _uiState.value.runtimeSessionId != data.runtimeSessionId) return
+            if (activeTurnId == pending) activeTurnId = null
+            queueAwaitingTurnSettlement = false
+            _uiState.update { it.copy(pendingUnknownTurnId = it.pendingUnknownTurnId.takeUnless { id -> id == pending },
+                isStreaming = false, submissionStatus = SubmissionStatus.IDLE) }
+        } else if (active != null) return
+        if (!current() || !queueForeground) return
+        queueRequiresIdle = false
+        if (queue.state.value.pause == QueuePause.DISCONNECTED) queue.resume()
+        viewModelScope.launch {
+            _uiState.first { !it.isHistoryReadInFlight && !it.isRefreshing }
+            queue.runNext(::canDispatchQueue, ::executeQueueItem)
+        }
+    }
+
     fun cancelQueuedItem(id: String) { viewModelScope.launch { chatQueue?.cancel(id) } }
     fun editQueuedItem(id: String) { viewModelScope.launch { chatQueue?.beginEdit(id) } }
     fun updateQueuedEdit(text: String) { viewModelScope.launch { chatQueue?.editText(text) } }
@@ -895,7 +925,17 @@ class ChatViewModel(
         if (state.composerDraft.isNotEmpty() || state.edit != null) return
         state.commandSuggestion?.let { updateDraft(it); _uiState.update { current -> current.copy(commandSuggestion = null) } }
     }
-    fun checkQueueStatus() { queueRequiresIdle = true; refreshSession() }
+    fun checkQueueStatus() {
+        val state = _uiState.value
+        if (state.isSubmitting || (state.isStreaming && state.queue.active?.state != QueueItemState.UNKNOWN)) return
+        queueRequiresIdle = true
+        // An unknown queue outcome can retain an obsolete local streaming flag.
+        // Read authoritative history rather than letting that flag reject Refresh.
+        if (_uiState.value.queue.active?.state == QueueItemState.UNKNOWN && !_uiState.value.isSubmitting &&
+            !_uiState.value.isRefreshing && !_uiState.value.isHistoryReadInFlight)
+            startHistoryRead(preserveAttachments = true, recovery = true, manual = true)
+        else refreshSession()
+    }
     fun dismissQueuedOutcome() {
         viewModelScope.launch {
             if (!checkQueueIdle()) {
@@ -915,7 +955,7 @@ class ChatViewModel(
     private fun canDispatchQueue(): Boolean {
         val state = _uiState.value
         return queueForeground && !historyDisposed && !queueRequiresIdle && !queueAwaitingTurnSettlement &&
-            !state.isInitialLoading && !state.isRefreshing && !state.isSubmitting && !state.isStreaming &&
+            !state.isInitialLoading && !state.isHistoryReadInFlight && !state.isRefreshing && !state.isSubmitting && !state.isStreaming &&
             !state.slashBusy && !state.isCompressionBusy && !state.pickerBusy && state.activePickerChange == null &&
             state.pendingUnknownTurnId == null && state.unknownEditId == null && state.edit == null && !state.voice.isBusy &&
             !state.approvals.blocksSend && state.savedSnapshotCapturedAtMillis == null &&
@@ -2155,15 +2195,20 @@ class ChatViewModel(
                 projectCachedToolTrace(data.durableSessionId, null, null) { current() }
                 if (!current()) return@onSuccess
 
+                reconcileQueueAfterHistory(data) { current() }
+                if (!current()) return@onSuccess
+
                 // Reconcile active/unknown pending turn with authoritative history
                 val targetStored = data.durableSessionId
-                coordinator?.reconcilePendingTurnWithHistory(targetStored, data.messages)?.let { outcome ->
-                    if (outcome is ReconciliationOutcome.ProvenByHistory) {
-                        _uiState.update { current ->
-                            current.copy(
-                                pendingUnknownTurnId = null,
-                                submissionStatus = SubmissionStatus.IDLE
-                            )
+                if (chatQueue?.state?.value?.active?.state != QueueItemState.UNKNOWN) {
+                    coordinator?.reconcilePendingTurnWithHistory(targetStored, data.messages)?.let { outcome ->
+                        if (outcome is ReconciliationOutcome.ProvenByHistory) {
+                            _uiState.update { current ->
+                                current.copy(
+                                    pendingUnknownTurnId = null,
+                                    submissionStatus = SubmissionStatus.IDLE
+                                )
+                            }
                         }
                     }
                 }
@@ -2641,6 +2686,7 @@ class ChatViewModel(
                         submitBlockedReason = SubmitBlockedReason.NO_RUNTIME) }
                     return@fold
                 }
+                if (current(true)) reconcileQueueAfterHistory(data) { current(true) }
                 if (current(true)) seedProfileModelDefaultIfMissing(SessionModelLabelPolicy.modelFromInfo(data.info))
                 if (current(true)) { restoreUnknownEdit(data); replaceRemoteSnapshotBestEffort(data, budget.receipt, scope.selectedContext) }
                 if (current(true)) projectCachedToolTrace(data.durableSessionId, budget.receipt, scope.selectedContext) { current(true) }
@@ -2808,9 +2854,13 @@ class ChatViewModel(
         restoreUnknownEdit(data)
         replaceRemoteSnapshotBestEffort(data)
         projectCachedToolTrace(data.durableSessionId)
-        coordinator?.reconcilePendingTurnWithHistory(data.durableSessionId, data.messages)?.let { outcome ->
-            if (outcome is ReconciliationOutcome.ProvenByHistory) {
-                _uiState.update { it.copy(pendingUnknownTurnId = null, submissionStatus = SubmissionStatus.IDLE) }
+        reconcileQueueAfterHistory(data, currentRefresh)
+        if (!currentRefresh()) return
+        if (chatQueue?.state?.value?.active?.state != QueueItemState.UNKNOWN) {
+            coordinator?.reconcilePendingTurnWithHistory(data.durableSessionId, data.messages)?.let { outcome ->
+                if (outcome is ReconciliationOutcome.ProvenByHistory) {
+                    _uiState.update { it.copy(pendingUnknownTurnId = null, submissionStatus = SubmissionStatus.IDLE) }
+                }
             }
         }
     }
@@ -3090,7 +3140,8 @@ class ChatViewModel(
                     attachmentController.verifyImageCountAfterReconnect()
                 }
                 if (isEdgeToConnected &&
-                    (storedHistoryScope != null || _uiState.value.submitBlockedReason == SubmitBlockedReason.NO_RUNTIME) &&
+                    (storedHistoryScope != null || _uiState.value.submitBlockedReason == SubmitBlockedReason.NO_RUNTIME ||
+                        _uiState.value.queue.pause == QueuePause.DISCONNECTED) &&
                     sessionRepository != null &&
                     sessionId != "new-session"
                 ) {
@@ -4325,6 +4376,10 @@ class ChatViewModel(
         completedTurnId?.let { turnId ->
             viewModelScope.launch {
                 pendingTurnLedger?.markResolved(turnId)
+                val recovered = chatQueue?.state?.value?.active
+                if (completionResult == QueueExecutionResult.COMPLETE && recovered?.pendingTurnId == turnId &&
+                    recovered.state == QueueItemState.UNKNOWN && chatQueue?.resolveCompletedPrompt(recovered.id) == true)
+                    queueRequiresIdle = false
                 if (completingQueueTurn == null && completionResult != QueueExecutionResult.COMPLETE &&
                     _uiState.value.queue.waiting.isNotEmpty()) {
                     queueRequiresIdle = true

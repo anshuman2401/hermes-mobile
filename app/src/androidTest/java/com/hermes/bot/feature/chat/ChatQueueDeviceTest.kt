@@ -106,15 +106,15 @@ class ChatQueueDeviceTest {
         compose.onNodeWithText("Attachments are available when the queue is empty and chat is idle.").assertDoesNotExist()
         compose.onNodeWithContentDescription("Stop generating").assertIsDisplayed()
     }
-    @Test fun uncertainActiveSubmissionKeepsExplicitReviewWithInlineWaitingPrompt() {
+    @Test fun uncertainActiveSubmissionShowsInlineRecoveryWithWaitingPrompt() {
         show(listOf(QueueItem(payload = QueuePayload.Prompt("Synthetic waiting prompt"))), streaming = false,
             active = QueueItem(payload = QueuePayload.Prompt("Synthetic uncertain prompt"), state = QueueItemState.STREAMING))
         compose.onNodeWithTag("queued-prompt-pills").assertIsDisplayed()
         compose.onNodeWithText("Synthetic waiting prompt").assertIsDisplayed()
         compose.onNodeWithText("Resume queue").assertDoesNotExist()
-        compose.onNodeWithText("Review queued messages").performClick()
-        compose.onNodeWithText("Outcome unknown · Synthetic uncertain prompt").assertIsDisplayed()
-        compose.onNodeWithText("Check status").assertIsDisplayed()
+        compose.onNodeWithText("Review queued messages").assertDoesNotExist()
+        compose.onNodeWithText("Could not confirm your message finished.").assertIsDisplayed()
+        compose.onNodeWithText("Refresh").assertIsDisplayed()
         compose.onNodeWithText("Dismiss").assertIsDisplayed()
         compose.onNodeWithText("Retry").assertDoesNotExist()
         compose.runOnIdle { assertEquals(QueueItemState.UNKNOWN, model.uiState.value.queue.active?.state)

@@ -100,6 +100,15 @@ class ChatQueueCoordinator(private val store: ChatQueueStore) {
         if (current.active?.id == id && current.active.state !in setOf(QueueItemState.FAILED, QueueItemState.UNKNOWN))
             save(current.copy(active = current.active.withState(state, pendingTurnId ?: current.active.pendingTurnId)))
     }
+    /** Only the owning ViewModel may supply authoritative completion evidence. */
+    suspend fun resolveCompletedPrompt(id: String): Boolean = mutex.withLock {
+        val current = mutable.value
+        if (current.active?.id != id || current.active.payload !is QueuePayload.Prompt ||
+            current.active.state != QueueItemState.UNKNOWN || !ownerCurrent()) return@withLock false
+        save(current.copy(active = null, pause = current.pause.takeUnless {
+            it == QueuePause.UNKNOWN || it == QueuePause.DISCONNECTED
+        }))
+    }
     suspend fun dismissActive() = mutex.withLock {
         val current = mutable.value
         if (current.active?.state in setOf(QueueItemState.FAILED, QueueItemState.UNKNOWN, QueueItemState.CONFIRMING))

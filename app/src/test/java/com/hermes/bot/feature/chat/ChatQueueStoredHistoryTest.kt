@@ -60,6 +60,46 @@ class ChatQueueStoredHistoryTest {
         }
     }
 
+    @Test fun storedHistoryRefreshClearsCompletedUnknownEntryAndDrainsLaterIntent() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize()
+            val ledger = PendingTurnLedger(f.vault)
+            f.metadata = "\"running\":true,\"status\":\"running\""
+            val admitted = ledger.prepareTurn("synthetic-session", "Synthetic compact question", "synthetic-runtime")
+            ledger.markConfirmedAdmitted(admitted.pendingTurnId)
+            val seeded = VaultChatQueueStore(f.vault) { "synthetic-session" }
+            seeded.read()
+            assertTrue(seeded.write(com.hermes.bot.data.queue.ChatQueueState(
+                active = com.hermes.bot.data.queue.QueueItem(payload = com.hermes.bot.data.queue.QueuePayload.Prompt("Synthetic compact question"),
+                    state = QueueItemState.UNKNOWN, pendingTurnId = admitted.pendingTurnId),
+                waiting = listOf(com.hermes.bot.data.queue.QueueItem(payload = com.hermes.bot.data.queue.QueuePayload.Prompt("Synthetic later prompt"))))))
+            var writes = 0
+            f.transport.setRpcHandler("prompt.submit") { id, _ ->
+                writes++
+                f.transport.respondSuccess(id, """{"status":"streaming"}""")
+            }
+            val chat = ChatViewModel("synthetic-session", sessionRepository = f.repository,
+                gatewayProtocolAdapter = f.gateway, vaultStorage = f.vault, pendingTurnLedger = ledger,
+                conversationCacheRepository = f.cache,
+                chatQueueFactory = { id -> VaultChatQueueStore(f.vault, id) })
+            val owner = ViewModelStore().apply { put("synthetic", chat) }
+            try {
+                chat.setQueueVisibility(true)
+                f.awaitLoaded(chat)
+                awaitState(chat) { it.queue.loaded }
+                assertEquals(0, writes)
+                f.metadata = "\"running\":false,\"status\":\"idle\""
+                chat.checkQueueStatus()
+                f.awaitHistoryRead(chat)
+
+                val next = awaitState(chat) { it.queue.active?.state == QueueItemState.STREAMING && it.queue.waiting.isEmpty() }
+                assertEquals(1, writes)
+                assertNotEquals(admitted.pendingTurnId, next.queue.active?.pendingTurnId)
+                assertEquals(com.hermes.bot.data.local.PendingTurnState.RESOLVED, ledger.getPendingTurn(admitted.pendingTurnId)?.state)
+            } finally { owner.clear() }
+        }
+    }
+
     private suspend fun awaitState(chat: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withContext(Dispatchers.Default) { withTimeout(5000) { chat.uiState.first(predicate) } }
 }
