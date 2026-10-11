@@ -14,10 +14,10 @@ object ChatScreenTopBarPolicy {
         ?: if (isNew) NEW_CONVERSATION_HEADER_LABEL else UNTITLED_CONVERSATION_HEADER_LABEL
 
     fun isConnected(state: ChatUiState?): Boolean =
-        state?.headerConnectionStatus == ConnectionStatus.CONNECTED && state.savedSnapshotCapturedAtMillis == null
+        state?.headerConnectionStatus == ConnectionStatus.CONNECTED && !state.showSavedSnapshot
 
     fun connectionLabel(state: ChatUiState?): String =
-        if (state?.savedSnapshotCapturedAtMillis != null) "Saved snapshot · Offline"
+        if (state?.showSavedSnapshot == true) "Saved snapshot · Offline"
         else when (state?.headerConnectionStatus) {
             ConnectionStatus.CONNECTED -> "Connected"
             ConnectionStatus.CONNECTING -> "Connecting…"

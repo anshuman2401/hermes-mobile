@@ -37,4 +37,24 @@ class ChatLoadingPresentationTest {
         assertEquals(123L, snapshot.savedSnapshotCapturedAtMillis)
         assertFalse(snapshot.isComposerReady)
     }
+
+    @Test fun cachedPreviewIsQuietWhileLoadingStillGatesActions() {
+        val state = ChatUiState(timeline = listOf(AssistantMessage("synthetic-row", "Synthetic message")),
+            headerConnectionStatus = com.hermes.bot.domain.ConnectionStatus.CONNECTED,
+            isInitialLoading = true, isCachedHistoryPreview = true, savedSnapshotCapturedAtMillis = 123L,
+            submitBlockedReason = SubmitBlockedReason.NO_RUNTIME, composerDraft = "Synthetic draft")
+        assertFalse(state.showInitialLoading)
+        assertFalse(state.showHistoryLoading)
+        assertFalse(state.showHistoryRefresh)
+        assertFalse(state.showSavedSnapshot)
+        assertTrue(ChatScreenTopBarPolicy.isConnected(state))
+        assertEquals("Connected", ChatScreenTopBarPolicy.connectionLabel(state))
+        assertNull(ChatRestoreNoticePolicy.forState(state))
+        assertNull(state.attachmentDisabledReason)
+        assertFalse(state.isComposerReady)
+        assertFalse(state.canAttachImage)
+        assertFalse(state.canOpenPicker)
+        assertFalse(state.editReady())
+        assertTrue(state.copy(isCachedHistoryPreview = false).showSavedSnapshot)
+    }
 }

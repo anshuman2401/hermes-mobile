@@ -171,6 +171,10 @@ class StoredHistoryPrivacyTest {
             val realCache = VaultConversationCacheRepository(gateVault)
             val writeFinished = CompletableDeferred<ConversationCacheWriteResult>()
             val observedCache = object : ConversationCacheRepository by realCache {
+                // This regression gates partition acquisition for the write; previews read independently.
+                override suspend fun loadScoped(storedSessionId: String, expected: AuthCredentialLease,
+                    selectedContext: String?): ConversationCacheReadResult =
+                    f.cache.loadScoped(storedSessionId, expected, selectedContext)
                 override suspend fun replaceRemoteSnapshotScoped(storedSessionId: String, resume: com.hermes.bot.data.gateway.SessionResumeResult, nowMillis: Long, expected: AuthCredentialLease, selectedContext: String?): ConversationCacheWriteResult {
                     try {
                         val result = realCache.replaceRemoteSnapshotScoped(storedSessionId, resume, nowMillis, expected, selectedContext)
