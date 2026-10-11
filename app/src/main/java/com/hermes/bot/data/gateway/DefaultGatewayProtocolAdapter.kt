@@ -201,20 +201,18 @@ class DefaultGatewayProtocolAdapter(
         diagnosticRing?.updateHostInfo(origin = canonicalOrigin.originUrl)
         diagnosticRing?.record(DiagnosticEvent.WebSocket.Connecting(url = safeWsUrl))
 
-        // Clean up previous generation BEFORE advancing connectionGeneration per F-002
-        closeTransport(connectionGeneration, 1000, "Reconnecting new generation")
-
-        val gen: Long
-        synchronized(this) {
-            gen = ++connectionGeneration
+        val gen = synchronized(this) {
+            // Teardown, generation admission and readiness share the close/error monitor.
+            closeTransport(connectionGeneration, 1000, "Reconnecting new generation")
+            val next = ++connectionGeneration
+            if (transport is com.hermes.bot.data.gateway.okhttp.OkHttpGatewayTransport) {
+                transport.activeGeneration = next
+            }
+            _terminalFailure.value = null
+            _connectionStatus.value = ConnectionStatus.CONNECTING
+            requestCounter.set(0)
+            next
         }
-        if (transport is com.hermes.bot.data.gateway.okhttp.OkHttpGatewayTransport) {
-            transport.activeGeneration = gen
-        }
-
-        _terminalFailure.value = null
-        _connectionStatus.value = ConnectionStatus.CONNECTING
-        requestCounter.set(0)
 
         val readyDef = CompletableDeferred<GatewayEvent.Ready>()
         readyDeferred = Pair(gen, readyDef)
@@ -359,21 +357,23 @@ class DefaultGatewayProtocolAdapter(
         if (gen != connectionGeneration) return false
         // Optional client capability: older hosts remain usable for ordinary chat.
         val advertisement = sendRpc("client.capabilities", mapOf("server_requests" to true), allowHandshakeRpc = true)
-        if (gen != connectionGeneration) return false
-        approvalStore.available(advertisement is GatewayResult.Success &&
-            (advertisement.value["server_requests"] as? JsonArray)?.list?.any { it.asStringOrNull() == "approval" } == true)
-        connectedOrigin = canonicalOrigin
-        _connectionStatus.value = ConnectionStatus.CONNECTED
-        diagnosticRing?.record(DiagnosticEvent.WebSocket.Connected(url = safeWsUrl))
-
-        if (heartbeatAdvertised) {
-            startHeartbeatLoop(gen)
+        return synchronized(this) {
+            // Unsupported/timeout optional RPCs may degrade approvals, but a closed
+            // attempt must never regain readiness. Keep this atomic with close/error
+            // classification, explicit disconnect and heartbeat teardown.
+            if (gen != connectionGeneration || _connectionStatus.value != ConnectionStatus.CONNECTING ||
+                _terminalFailure.value != null) return@synchronized false
+            approvalStore.available(advertisement is GatewayResult.Success &&
+                (advertisement.value["server_requests"] as? JsonArray)?.list?.any { it.asStringOrNull() == "approval" } == true)
+            connectedOrigin = canonicalOrigin
+            _connectionStatus.value = ConnectionStatus.CONNECTED
+            diagnosticRing?.record(DiagnosticEvent.WebSocket.Connected(url = safeWsUrl))
+            if (heartbeatAdvertised) startHeartbeatLoop(gen)
+            true
         }
-
-        return true
     }
 
-    private fun startHeartbeatLoop(generation: Long) {
+    private fun startHeartbeatLoop(generation: Long) = synchronized(this) {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch(heartbeatDispatcher) {
             while (isActive && generation == connectionGeneration && _connectionStatus.value == ConnectionStatus.CONNECTED) {
@@ -383,26 +383,33 @@ class DefaultGatewayProtocolAdapter(
                 }
                 val pingRes = ping()
                 if (pingRes is GatewayResult.Failure) {
-                    closeTransport(generation, 1000, "Heartbeat ping failed")
-                    _connectionStatus.value = ConnectionStatus.FAILED
+                    synchronized(this@DefaultGatewayProtocolAdapter) {
+                        // Background cancellation and superseded waiters do not own
+                        // the current socket or its already-classified failure.
+                        if (isActive && generation == connectionGeneration &&
+                            _connectionStatus.value == ConnectionStatus.CONNECTED) {
+                            closeTransport(generation, 1000, "Heartbeat ping failed")
+                            _connectionStatus.value = ConnectionStatus.FAILED
+                        }
+                    }
                     break
                 }
             }
         }
     }
 
-    override fun suspendHeartbeat() {
+    override fun suspendHeartbeat() = synchronized(this) {
         heartbeatJob?.cancel()
         heartbeatJob = null
     }
 
-    override fun resumeHeartbeat() {
+    override fun resumeHeartbeat() = synchronized(this) {
         if (heartbeatAdvertised && _connectionStatus.value == ConnectionStatus.CONNECTED && heartbeatJob == null) {
             startHeartbeatLoop(connectionGeneration)
         }
     }
 
-    private fun closeTransport(generation: Long, code: Int = 1000, reason: String? = null) {
+    private fun closeTransport(generation: Long, code: Int = 1000, reason: String? = null): Unit = synchronized(this) {
         if (generation != connectionGeneration && generation != -1L) {
             return
         }
@@ -451,12 +458,10 @@ class DefaultGatewayProtocolAdapter(
         pingDeferred = null
     }
 
-    override fun disconnect() {
+    override fun disconnect() = synchronized(this) {
         closeTransport(connectionGeneration, 1000, "Normal disconnect")
         diagnosticRing?.record(DiagnosticEvent.WebSocket.Disconnected(code = 1000, reason = "Normal disconnect"))
-        synchronized(this) {
-            connectionGeneration++
-        }
+        connectionGeneration++
         if (transport is com.hermes.bot.data.gateway.okhttp.OkHttpGatewayTransport) {
             transport.activeGeneration = connectionGeneration
         }
@@ -524,8 +529,11 @@ class DefaultGatewayProtocolAdapter(
 
         // 2. Heartbeat keepalive response: {"ok":true} or {"pong":true}
         if (json["ok"]?.asBooleanOrNull() == true || json["pong"]?.asBooleanOrNull() == true) {
-            if (pingDeferred?.first == gen) {
-                pingDeferred?.second?.complete(true)
+            synchronized(this) {
+                val waiter = pingDeferred
+                if (gen == connectionGeneration && waiter?.first == gen) {
+                    waiter.second.complete(true)
+                }
             }
         }
 
@@ -675,8 +683,9 @@ class DefaultGatewayProtocolAdapter(
         }
     }
 
-    private fun handleIncomingClose(code: Int, reason: String?, gen: Long) {
+    private fun handleIncomingClose(code: Int, reason: String?, gen: Long): Unit = synchronized(this) {
         if (gen != connectionGeneration) return
+        connectedOrigin = null
         approvalStore.reset()
 
         val safeReason = reason?.let { GatewayRedactor.redactString(it) }
@@ -712,8 +721,9 @@ class DefaultGatewayProtocolAdapter(
         }
     }
 
-    private fun handleIncomingError(cause: Throwable, handshakeStatusCode: Int?, gen: Long) {
+    private fun handleIncomingError(cause: Throwable, handshakeStatusCode: Int?, gen: Long): Unit = synchronized(this) {
         if (gen != connectionGeneration) return
+        connectedOrigin = null
         approvalStore.reset()
 
         val safeMsg = GatewayRedactor.redactString(cause.message ?: "Transport error")
@@ -748,6 +758,13 @@ class DefaultGatewayProtocolAdapter(
         return "android-$connectionGeneration-${requestCounter.incrementAndGet()}"
     }
 
+    private fun failHandshakeWrite(generation: Long) = synchronized(this) {
+        if (generation == connectionGeneration && _connectionStatus.value == ConnectionStatus.CONNECTING) {
+            closeTransport(generation, 1000, "Handshake write failed")
+            _connectionStatus.value = ConnectionStatus.FAILED
+        }
+    }
+
     private suspend fun sendRpc(
         method: String,
         params: Map<String, Any?>,
@@ -778,6 +795,7 @@ class DefaultGatewayProtocolAdapter(
             transport.send(rawWire)
         } catch (e: Exception) {
             pendingRequests.remove(id)
+            if (allowHandshakeRpc) failHandshakeWrite(gen)
             val safeMsg = GatewayRedactor.redactString(e.message ?: "Failed sending RPC frame")
             val failure = if (method == "prompt.submit") {
                 GatewayFailure.SubmissionUnknown("Failed writing prompt frame to socket: $safeMsg", e.javaClass.simpleName)
@@ -789,6 +807,7 @@ class DefaultGatewayProtocolAdapter(
 
         if (!sent) {
             pendingRequests.remove(id)
+            if (allowHandshakeRpc) failHandshakeWrite(gen)
             val failure = if (method == "prompt.submit") {
                 GatewayFailure.SubmissionUnknown("Failed sending prompt frame")
             } else {
@@ -1910,6 +1929,8 @@ class DefaultGatewayProtocolAdapter(
     }
 
     override suspend fun ping(): GatewayResult<GatewayPingResult> {
+        val context = currentCoroutineContext()
+        context.ensureActive()
         val status = _connectionStatus.value
         if (status != ConnectionStatus.CONNECTED && status != ConnectionStatus.CONNECTING) {
             return GatewayResult.Failure(GatewayFailure.NotConnected())
@@ -1927,53 +1948,65 @@ class DefaultGatewayProtocolAdapter(
 
         val rpcDef = CompletableDeferred<JsonValue>()
         val rawPingDef = CompletableDeferred<Boolean>()
-        pendingRequests[id] = PendingRpc("gateway.ping", rpcDef, gen)
-        pingDeferred = Pair(gen, rawPingDef)
+        val rawWaiter = Pair(gen, rawPingDef)
+        synchronized(this) {
+            context.ensureActive()
+            if (gen != connectionGeneration ||
+                (_connectionStatus.value != ConnectionStatus.CONNECTED &&
+                    _connectionStatus.value != ConnectionStatus.CONNECTING)) {
+                return GatewayResult.Failure(GatewayFailure.NotConnected())
+            }
+            pendingRequests[id] = PendingRpc("gateway.ping", rpcDef, gen)
+            pingDeferred = rawWaiter
+        }
 
-        val sent = try {
-            transport.send(rawWire)
-        } catch (e: Exception) {
-            pendingRequests.remove(id)
-            pingDeferred = null
-            return GatewayResult.Failure(
-                GatewayFailure.Transport(
-                    GatewayRedactor.redactString(e.message ?: "Failed sending ping frame"),
-                    e.javaClass.simpleName
+        try {
+            val sent = try {
+                transport.send(rawWire)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                return GatewayResult.Failure(
+                    GatewayFailure.Transport(
+                        GatewayRedactor.redactString(e.message ?: "Failed sending ping frame"),
+                        e.javaClass.simpleName
+                    )
                 )
-            )
-        }
+            }
 
-        if (!sent) {
-            pendingRequests.remove(id)
-            pingDeferred = null
-            return GatewayResult.Failure(GatewayFailure.Transport("Failed sending ping frame"))
-        }
+            if (!sent) return GatewayResult.Failure(GatewayFailure.Transport("Failed sending ping frame"))
 
-        return try {
-            val result = withTimeoutOrNull(rpcTimeoutMs) {
-                kotlinx.coroutines.selects.select<GatewayResult<GatewayPingResult>> {
-                    rawPingDef.onAwait { ok ->
-                        GatewayResult.Success(GatewayPingResult(ok = ok))
-                    }
-                    rpcDef.onAwait { jsonVal ->
-                        val ok = jsonVal["ok"]?.asBooleanOrNull() ?: true
-                        GatewayResult.Success(GatewayPingResult(ok = ok))
+            return try {
+                val result = withTimeoutOrNull(rpcTimeoutMs) {
+                    kotlinx.coroutines.selects.select<GatewayResult<GatewayPingResult>> {
+                        rawPingDef.onAwait { ok ->
+                            GatewayResult.Success(GatewayPingResult(ok = ok))
+                        }
+                        rpcDef.onAwait { jsonVal ->
+                            val ok = jsonVal["ok"]?.asBooleanOrNull() ?: true
+                            GatewayResult.Success(GatewayPingResult(ok = ok))
+                        }
                     }
                 }
-            }
-            result ?: GatewayResult.Failure(GatewayFailure.Transport("RPC call 'gateway.ping' timed out"))
-        } catch (e: GatewayException) {
-            GatewayResult.Failure(e.failure)
-        } catch (e: Exception) {
-            GatewayResult.Failure(
-                GatewayFailure.Transport(
-                    GatewayRedactor.redactString(e.message ?: "Ping execution exception"),
-                    e.javaClass.simpleName
+                result ?: GatewayResult.Failure(GatewayFailure.Transport("RPC call 'gateway.ping' timed out"))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: GatewayException) {
+                GatewayResult.Failure(e.failure)
+            } catch (e: Exception) {
+                GatewayResult.Failure(
+                    GatewayFailure.Transport(
+                        GatewayRedactor.redactString(e.message ?: "Ping execution exception"),
+                        e.javaClass.simpleName
+                    )
                 )
-            )
+            }
         } finally {
             pendingRequests.remove(id)
-            pingDeferred = null
+            synchronized(this) {
+                // A cancelled ping cannot clear a replacement raw-pong waiter.
+                if (pingDeferred === rawWaiter) pingDeferred = null
+            }
         }
     }
 
