@@ -65,6 +65,44 @@ class ChatCachedHistoryPreviewTest {
         }
     }
 
+    @Test fun selectedWorkspaceSavesHistoryAndPreviewsItAfterBackWhileBothHostReadsWait() = runBlocking(main.testDispatcher) {
+        StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
+            f.initialize()
+            val first = f.vm()
+            f.awaitLoaded(first)
+            assertTrue(first.uiState.value.hasAcceptedStoredHistory)
+            assertTrue(f.cache.load("synthetic-session") is ConversationCacheReadResult.Snapshot)
+            // Back disposes the keyed chat owner; reopening constructs a fresh ViewModel.
+            f.clearVMs()
+            val resume = holdHost(f)
+            val reopened = f.vm()
+            try {
+                await { resume.await(); f.bodyEntered!!.await(); reopened.uiState.first { it.isCachedHistoryPreview } }
+                val preview = reopened.uiState.value
+                assertEquals("Synthetic compact answer", preview.timeline.filterIsInstance<AssistantMessage>().single().text)
+                assertFalse(preview.showInitialLoading)
+                assertFalse(preview.showSavedSnapshot)
+                assertNull(ChatRestoreNoticePolicy.forState(preview))
+                assertNull(preview.runtimeSessionId)
+                assertFalse(preview.isComposerReady)
+                assertEquals(2, f.gets)
+                reopened.updateDraft("Synthetic draft during refresh")
+                assertFalse(reopened.uiState.value.isComposerReady)
+
+                f.transport.respondSuccess(resume.await(), f.resumeBody())
+                f.bodyGate!!.complete(Unit)
+                f.awaitLoaded(reopened)
+                val fresh = reopened.uiState.value
+                assertFalse(fresh.isCachedHistoryPreview)
+                assertNull(fresh.savedSnapshotCapturedAtMillis)
+                assertEquals("synthetic-runtime", fresh.runtimeSessionId)
+                assertTrue(fresh.timeline.filterIsInstance<AssistantMessage>().any { it.text == "Synthetic stored answer" })
+                assertEquals("Synthetic draft during refresh", fresh.composerDraft)
+                assertTrue(fresh.isComposerReady)
+            } finally { f.clearVMs() }
+        }
+    }
+
     @Test fun defaultSelectionRejectsLateCacheAfterWorkspaceLoginOrOwnerDisposal() = runBlocking(main.testDispatcher) {
         for (mutation in listOf("workspace", "login", "dispose")) {
             StoredChatFixture(temp.newFolder(), main.testDispatcher).use { f ->
