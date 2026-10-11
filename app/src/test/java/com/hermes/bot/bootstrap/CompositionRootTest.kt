@@ -150,6 +150,9 @@ class CompositionRootTest {
         vaultField.isAccessible = true
 
         assertTrue(vaultField.get(viewModel) === container.vaultStorage)
+        val cameraField = ChatViewModel::class.java.getDeclaredField("cameraPhotoStore").apply { isAccessible = true }
+        assertTrue(cameraField.get(viewModel) is com.hermes.bot.data.attachments.AndroidCameraPhotoStore)
+        assertTrue(cameraField.get(viewModel) === cameraField.get(container.createChatViewModel("new-session")))
     }
 
     private fun createProxyContainer(dependencies: Map<String, Any>): AppContainer {

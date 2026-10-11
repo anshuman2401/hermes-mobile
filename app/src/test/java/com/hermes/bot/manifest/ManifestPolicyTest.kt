@@ -9,6 +9,32 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 class ManifestPolicyTest {
 
+    @Test
+    fun cameraUsesOptionalExternalActivityAndNarrowNonExportedCacheProvider() {
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(manifestFile)
+        val permissions = doc.getElementsByTagName("uses-permission")
+        for (i in 0 until permissions.length) {
+            val name = permissions.item(i).attributes.getNamedItem("android:name").nodeValue
+            assertFalse(name == "android.permission.CAMERA" || name.contains("STORAGE") || name.startsWith("android.permission.READ_MEDIA"))
+        }
+        val features = doc.getElementsByTagName("uses-feature")
+        val camera = (0 until features.length).map { features.item(it) }
+            .single { it.attributes.getNamedItem("android:name").nodeValue == "android.hardware.camera.any" }
+        assertEquals("false", camera.attributes.getNamedItem("android:required").nodeValue)
+        val providers = doc.getElementsByTagName("provider")
+        val provider = (0 until providers.length).map { providers.item(it) }
+            .single { it.attributes.getNamedItem("android:authorities").nodeValue.endsWith(".cameraphotos") }
+        assertEquals("false", provider.attributes.getNamedItem("android:exported").nodeValue)
+        assertEquals(".data.attachments.CameraPhotoProvider", provider.attributes.getNamedItem("android:name").nodeValue)
+        assertEquals("true", provider.attributes.getNamedItem("android:grantUriPermissions").nodeValue)
+        val pathsFile = File(manifestFile.parentFile, "res/xml/camera_photo_paths.xml")
+        val paths = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pathsFile).documentElement
+        val elements = (0 until paths.childNodes.length).map { paths.childNodes.item(it) }.filter { it.nodeType == org.w3c.dom.Node.ELEMENT_NODE }
+        assertEquals(1, elements.size)
+        assertEquals("cache-path", elements.single().nodeName)
+        assertEquals("camera-attachments/", elements.single().attributes.getNamedItem("path").nodeValue)
+    }
+
     private val manifestFile = File("src/main/AndroidManifest.xml").let {
         if (it.exists()) it else File("app/src/main/AndroidManifest.xml")
     }

@@ -102,6 +102,8 @@ data class ChatUiState(
     val pendingFiles: List<PendingFileAttachment> = emptyList(),
     val isAttachingImage: Boolean = false,
     val isAttachingFile: Boolean = false,
+    /** A memory-only capture/review blocks send and competing attachment operations. */
+    val cameraBusy: Boolean = false,
     val attachmentErrorMessage: String? = null,
     /** Updated from the gateway status; tests without an adapter use the live-session gate. */
     val isAttachmentConnectionAvailable: Boolean = true,
@@ -267,7 +269,7 @@ data class ChatUiState(
         (queueEnabled && isSlashCommand && !isImmediateSlash)
 
     val canEnqueue: Boolean get() = queueEnabled && queue.loaded && !queue.isFull &&
-        edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable &&
+        edit == null && unknownEditId == null && !voice.isBusy && !cameraBusy && isAttachmentConnectionAvailable &&
         composerDraft.isNotBlank() && !runtimeSessionId.isNullOrBlank() && !isInitialLoading &&
         !isAttachingImage && !isAttachingFile && pendingImages.isEmpty() && pendingFiles.isEmpty() &&
         savedSnapshotCapturedAtMillis == null
@@ -280,7 +282,7 @@ data class ChatUiState(
     private val queueAllowsAttachments: Boolean get() = !queueEnabled ||
         (queue.loaded && queue.pause != com.hermes.bot.data.queue.QueuePause.STORAGE && queue.waiting.isEmpty() && queue.active == null)
     val isComposerReady: Boolean
-        get() = if (queueEnabled && (queuesComposerInput || isImmediateSlash) && pendingImages.isEmpty() && pendingFiles.isEmpty()) canEnqueue ||
+        get() = !cameraBusy && (if (queueEnabled && (queuesComposerInput || isImmediateSlash) && pendingImages.isEmpty() && pendingFiles.isEmpty()) canEnqueue ||
             (isImmediateSlash && edit == null && unknownEditId == null && !voice.isBusy &&
                 !runtimeSessionId.isNullOrBlank() && savedSnapshotCapturedAtMillis == null && !isInitialLoading) else edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable && queueAllowsAttachments &&
             (composerDraft.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()) &&
@@ -295,10 +297,10 @@ data class ChatUiState(
             submitBlockedReason == null &&
             // PR-3 (§6): an offline saved snapshot never arms Send — Hermes
             // reconnect (§6 row 1 / PR-7) is what re-enables the composer.
-            savedSnapshotCapturedAtMillis == null
+            savedSnapshotCapturedAtMillis == null)
 
     val canAttachImage: Boolean
-        get() = edit == null && unknownEditId == null && !voice.isBusy && !runtimeSessionId.isNullOrBlank() &&
+        get() = edit == null && unknownEditId == null && !voice.isBusy && !cameraBusy && !runtimeSessionId.isNullOrBlank() &&
             !isInitialLoading && !isRefreshing && !isSubmitting && !isStreaming && !slashBusy && !isCompressionBusy &&
             queueAllowsAttachments &&
             !isAttachingImage && !isAttachingFile && submitBlockedReason == null &&
@@ -309,7 +311,7 @@ data class ChatUiState(
         !pickerBusy && pendingUnknownTurnId == null
 
     val canQueueCommand: Boolean get() = queueEnabled && queue.loaded && !queue.isFull &&
-        edit == null && unknownEditId == null && !voice.isBusy && isAttachmentConnectionAvailable &&
+        edit == null && unknownEditId == null && !voice.isBusy && !cameraBusy && isAttachmentConnectionAvailable &&
         !runtimeSessionId.isNullOrBlank() && !isInitialLoading &&
         !isAttachingImage && !isAttachingFile && pendingImages.isEmpty() && pendingFiles.isEmpty() && savedSnapshotCapturedAtMillis == null
     val canToggleYolo: Boolean get() = if (queueEnabled) canQueueCommand else sessionYolo != null && !yoloPending && !yoloUnconfirmed && canAttachImage

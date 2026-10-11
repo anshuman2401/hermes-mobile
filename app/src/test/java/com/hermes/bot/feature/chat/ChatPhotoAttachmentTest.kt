@@ -59,13 +59,94 @@ class ChatPhotoAttachmentTest {
         }
     }
 
-    private fun viewModel(repo: Repo, bytes: ByteArray, sessionId: String = "<durable>", adapter: FakeGatewayProtocolAdapter? = null) = ChatViewModel(
+    private fun viewModel(repo: Repo, bytes: ByteArray, sessionId: String = "<durable>", adapter: FakeGatewayProtocolAdapter? = null,
+        cameraStore: com.hermes.bot.data.attachments.CameraPhotoStore? = null) = ChatViewModel(
         sessionId = sessionId,
         sessionRepository = repo,
         gatewayProtocolAdapter = adapter,
         photoAttachmentReader = PhotoAttachmentReader { SelectedPhoto(bytes, "photo.png", "png") },
-        photoReadContext = mainDispatcherRule.testDispatcher
+        photoReadContext = mainDispatcherRule.testDispatcher,
+        cameraPhotoStore = cameraStore
     )
+
+    private class CameraStore : com.hermes.bot.data.attachments.CameraPhotoStore {
+        val photo = com.hermes.bot.data.attachments.CameraPhoto("<camera-selection>")
+        var discarded = false
+        override suspend fun create() = photo
+        override suspend fun preview(photo: com.hermes.bot.data.attachments.CameraPhoto) = byteArrayOf(1)
+        override fun discard(photo: com.hermes.bot.data.attachments.CameraPhoto) { discarded = true }
+    }
+
+    @Test fun cameraReviewUsesExistingUpload_andRetainsOriginalUntilAttachmentCompletes() = runTest {
+        val repo = Repo().apply { attachGate = CompletableDeferred() }
+        val store = CameraStore()
+        val vm = viewModel(repo, byteArrayOf(97), cameraStore = store)
+        advanceUntilIdle()
+        vm.startCamera()
+        advanceUntilIdle()
+        val token = vm.cameraState.value.token!!
+        assertEquals(store.photo.uri, vm.claimCameraLaunch(token))
+        vm.cameraResult(token, true)
+        advanceUntilIdle()
+        assertEquals(CameraPhase.REVIEW, vm.cameraState.value.phase)
+        assertTrue(repo.attached.isEmpty())
+        assertFalse(vm.uiState.value.isComposerReady)
+        vm.useCameraPhoto()
+        vm.useCameraPhoto()
+        advanceUntilIdle()
+        assertEquals(listOf("<runtime>" to 1), repo.attached)
+        assertFalse(store.discarded)
+        assertTrue(vm.uiState.value.isAttachingImage)
+        repo.attachGate!!.complete(GatewayResult.Success(AttachImageResult("<image-path>", 1, "<image-text>", 1)))
+        advanceUntilIdle()
+        assertTrue(store.discarded)
+        assertEquals(1, vm.uiState.value.pendingImages.size)
+        assertTrue(vm.uiState.value.isComposerReady)
+    }
+
+    @Test fun cameraReviewIsDiscardedOnDisconnect_andCannotBeUsedAfterReconnect() = runTest {
+        val adapter = FakeGatewayProtocolAdapter()
+        val repo = Repo()
+        val store = CameraStore()
+        val vm = viewModel(repo, byteArrayOf(97), adapter = adapter, cameraStore = store)
+        advanceUntilIdle()
+        vm.startCamera()
+        advanceUntilIdle()
+        val token = vm.cameraState.value.token!!
+        vm.claimCameraLaunch(token)
+        vm.cameraResult(token, true)
+        advanceUntilIdle()
+        adapter.connectionStatus.value = ConnectionStatus.OFFLINE
+        advanceUntilIdle()
+        assertEquals(CameraPhase.IDLE, vm.cameraState.value.phase)
+        assertTrue(store.discarded)
+        adapter.connectionStatus.value = ConnectionStatus.CONNECTED
+        advanceUntilIdle()
+        vm.cameraResult(token, true)
+        vm.useCameraPhoto()
+        advanceUntilIdle()
+        assertTrue(repo.attached.isEmpty())
+    }
+
+    @Test fun sameRuntimeHistoryReloadDiscardsUnconfirmedCameraPhoto() = runTest {
+        val repo = Repo()
+        val store = CameraStore()
+        val vm = viewModel(repo, byteArrayOf(97), cameraStore = store)
+        advanceUntilIdle()
+        vm.startCamera()
+        advanceUntilIdle()
+        val token = vm.cameraState.value.token!!
+        vm.claimCameraLaunch(token)
+        vm.cameraResult(token, true)
+        advanceUntilIdle()
+        vm.loadSession()
+        advanceUntilIdle()
+        assertEquals(CameraPhase.IDLE, vm.cameraState.value.phase)
+        assertTrue(store.discarded)
+        vm.useCameraPhoto()
+        advanceUntilIdle()
+        assertTrue(repo.attached.isEmpty())
+    }
 
     @Test fun selectedPhoto_attachesOnLiveRuntime_thenRemovalDetachesServerPath() = runTest {
         val repo = Repo()
