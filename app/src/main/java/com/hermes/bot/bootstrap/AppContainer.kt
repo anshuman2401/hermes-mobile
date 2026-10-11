@@ -93,7 +93,6 @@ interface AppContainer {
     val gatewayTransport: GatewayTransport
     val gatewayAdapter: GatewayProtocolAdapter
     val botRepository: BotRepository
-    val botThreadPreviewRepository: com.hermes.bot.data.context.BotThreadPreviewRepository? get() = null
     val brainMainSettingsRepository: BrainMainSettingsRepository
     val brainAuxiliaryModelsRepository: BrainAuxiliaryModelsRepository
     val brainSkillsRepository: BrainSkillsRepository
@@ -231,10 +230,6 @@ class DefaultAppContainer(
     }
     override fun createBotScreenViewModel(): BotScreenViewModel =
         BotScreenViewModel(BotScreenRepository(botRepository, gatewayAdapter))
-    override val botThreadPreviewRepository: com.hermes.bot.data.context.BotThreadPreviewRepository by lazy {
-        com.hermes.bot.data.context.DefaultBotThreadPreviewRepository(vaultStorage, authRepository,
-            DefaultStoredHistoryProtocolAdapter(authRepository, OkHttpStoredHistoryTransport(maxBodyBytes = 128 * 1024)))
-    }
 
     override val brainMainSettingsRepository: BrainMainSettingsRepository by lazy {
         createBrainMainSettingsRepository(

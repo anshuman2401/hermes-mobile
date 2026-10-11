@@ -182,7 +182,6 @@ fun HermesBotAppRoot(
         chatViewModelProvider = chatVmProvider,
         botsViewModelProvider = botsVmProvider,
         botScreenViewModelProvider = botScreenVmProvider,
-        botThreadPreviewRepository = container?.botThreadPreviewRepository,
         brainModelsViewModelProvider = brainModelsProvider,
         brainAuxiliaryViewModelProvider = brainAuxiliaryProvider,
         brainSkillsViewModelProvider = brainSkillsProvider,

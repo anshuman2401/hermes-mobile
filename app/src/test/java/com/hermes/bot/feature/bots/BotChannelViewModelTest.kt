@@ -1,6 +1,5 @@
 package com.hermes.bot.feature.bots
 
-import com.hermes.bot.data.context.*
 import com.hermes.bot.data.gateway.SessionSummary
 import com.hermes.bot.data.session.*
 import com.hermes.bot.domain.SessionHandle
@@ -16,48 +15,6 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class BotChannelViewModelTest {
     @get:Rule val main = MainDispatcherRule()
-    private class Previews : BotThreadPreviewRepository {
-        var gate = CompletableDeferred<Unit>()
-        var active = 0
-        var maxActive = 0
-        val ids = mutableListOf<String>()
-        var nonCooperative = false
-        override suspend fun getReply(profile: String, durableId: String): BotThreadReply {
-            ids += durableId; active++; maxActive = maxOf(active, maxActive)
-            try {
-                if (nonCooperative) withContext(NonCancellable) { gate.await() } else gate.await()
-                return BotThreadReply("synthetic reply")
-            } finally { active-- }
-        }
-    }
-    @Test fun visibleRowsAreBoundedDeduplicatedAndOfflineClearsContent() = runTest {
-        val previews = Previews(); val vm = BotChannelViewModel(previews)
-        vm.enter("Alpha", "Alpha", null)
-        val ids = (1..8).map { "synthetic-$it" }
-        vm.showThreadPreviews(ids, true); runCurrent()
-        assertEquals(4, previews.ids.size)
-        vm.showThreadPreviews(ids, true); previews.gate.complete(Unit); advanceUntilIdle()
-        assertEquals(8, previews.ids.size); assertEquals(4, previews.maxActive)
-        assertEquals(ids.toSet(), vm.uiState.value.threadReplies.keys)
-        vm.showThreadPreviews(emptyList(), true); vm.showThreadPreviews(ids, true); advanceUntilIdle()
-        assertEquals(8, previews.ids.size)
-        vm.showThreadPreviews(ids, false); advanceUntilIdle()
-        assertTrue(vm.uiState.value.threadReplies.isEmpty()); assertEquals(8, previews.ids.size)
-    }
-    @Test fun routeExitProfileChangeAndDisconnectRejectLateNonCooperativeResults() = runTest {
-        for (action in listOf("exit", "profile", "disconnect")) {
-            val previews = Previews().apply { nonCooperative = true }
-            val vm = BotChannelViewModel(previews); vm.enter("Alpha", "Alpha", null)
-            vm.showThreadPreviews(listOf("synthetic-one"), true); runCurrent()
-            when (action) {
-                "exit" -> vm.leaveChannel()
-                "profile" -> vm.enter("Beta", "Beta", null)
-                else -> vm.clearConnection()
-            }
-            previews.gate.complete(Unit); advanceUntilIdle()
-            assertTrue(vm.uiState.value.threadReplies.isEmpty())
-        }
-    }
     private class Sessions : SessionRepository by ChatComposerSingleFlightTest.SingleFlightSessionRepository() {
         var creates = 0
         var gate = CompletableDeferred<Unit>()

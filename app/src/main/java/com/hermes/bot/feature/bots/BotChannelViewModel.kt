@@ -2,9 +2,7 @@ package com.hermes.bot.feature.bots
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.hermes.bot.data.context.*
 import com.hermes.bot.feature.sessions.SessionsUiState
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,17 +10,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import com.hermes.bot.feature.sessions.SessionsViewModel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.ensureActive
-import kotlin.coroutines.coroutineContext
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 data class BotChannelUiState(
     val avatar: com.hermes.bot.data.gateway.BotAvatar? = null,
     val displayName: String? = null,
     val connectionId: String? = null,
     val normalizedOrigin: String? = null,
-    val threadReplies: Map<String, BotThreadReply> = emptyMap(),
     val notice: String? = null,
     val channel: String? = null,
     val draft: String = "",
@@ -33,9 +26,7 @@ data class BotChannelUiState(
 )
 
 /** Presentation only: sessions remain owned by SessionsViewModel/repository. */
-class BotChannelViewModel(
-    private val threadPreviewRepository: BotThreadPreviewRepository? = null
-) : ViewModel() {
+class BotChannelViewModel : ViewModel() {
     private val state = MutableStateFlow(BotChannelUiState())
     val uiState = state.asStateFlow()
     private val positions = mutableMapOf<String, Pair<Int, Int>>()
@@ -47,49 +38,7 @@ class BotChannelViewModel(
     private var generation = 0L
     private var navigationGeneration = 0L
     val routeGeneration: Long get() = navigationGeneration
-    fun leaveChannel() { navigationGeneration++; clearThreadPreviews() }
-    private var previewGeneration = 0L
-    private val previewPermits = Semaphore(4)
-    private val previewJobs = mutableMapOf<String, Job>()
-    private val previewAttempts = mutableSetOf<String>()
-    private var visibleThreadIds = emptySet<String>()
-
-    fun clearThreadPreviews() {
-        previewGeneration++
-        previewJobs.values.forEach { it.cancel() }
-        previewJobs.clear()
-        previewAttempts.clear()
-        visibleThreadIds = emptySet()
-        state.update { it.copy(threadReplies = emptyMap()) }
-    }
-
-    /** Presentation intent; only visible, live, profile-matching rows may request a preview. */
-    fun showThreadPreviews(ids: List<String>, allowed: Boolean) {
-        if (!allowed) { clearThreadPreviews(); return }
-        val repo = threadPreviewRepository ?: return
-        val profile = state.value.channel ?: return
-        visibleThreadIds = ids.take(20).toSet()
-        val leaving = previewJobs.keys - visibleThreadIds
-        leaving.forEach { id ->
-            previewJobs.remove(id)?.let { job ->
-                if (job.isActive) { job.cancel(); previewAttempts.remove(id) }
-            }
-        }
-        val expected = previewGeneration
-        for (id in visibleThreadIds) {
-            if (!previewAttempts.add(id)) continue
-            previewJobs[id] = viewModelScope.launch {
-                val reply = try {
-                    previewPermits.withPermit { repo.getReply(profile, id) }
-                } catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { null }
-                coroutineContext.ensureActive()
-                if (expected == previewGeneration && state.value.channel == profile && id in visibleThreadIds) {
-                    if (reply != null) state.update { it.copy(threadReplies = it.threadReplies + (id to reply)) }
-                }
-            }
-        }
-    }
+    fun leaveChannel() { navigationGeneration++ }
     private var entryCounter = 0L
     private var entry: ChannelEntry? = null
     private val recovery = mutableMapOf<String, Pair<ChannelEntry, String>>()
@@ -150,7 +99,6 @@ class BotChannelViewModel(
 
     fun enter(name: String, displayName: String, avatar: com.hermes.bot.data.gateway.BotAvatar?,
         connectionId: String? = null, normalizedOrigin: String? = null) {
-        clearThreadPreviews()
         navigationGeneration++
         entry = recovery[name]?.first
         state.update { it.copy(channel = name, displayName = displayName, avatar = avatar,
@@ -167,7 +115,6 @@ class BotChannelViewModel(
 
     fun clearConnection() {
         generation++
-        clearThreadPreviews()
         navigationGeneration++
         createJob?.cancel()
         entry = null
