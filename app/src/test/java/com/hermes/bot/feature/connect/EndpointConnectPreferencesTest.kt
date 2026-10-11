@@ -254,6 +254,51 @@ class EndpointConnectPreferencesTest {
         assertEquals(ConnectState.FIRST_LAUNCH, viewModel.uiState.value.state)
     }
 
+    @Test fun failedEncryptedPreferenceReadReturnsToSetupBeforeNetworkRequests() {
+        var checks = 0
+        val auth = object : AuthRepository {
+            override suspend fun rememberLoginPreference(origin: CanonicalOrigin): Boolean =
+                throw KeyStoreUnavailableException("Synthetic key unavailable")
+            override suspend fun checkStatus(origin: CanonicalOrigin): Result<HostStatus> {
+                checks++
+                return Result.success(HostStatus("synthetic", true, true))
+            }
+            override suspend fun signOut(clearDrafts: Boolean, cacheChoice: SignOutCacheChoice) {}
+            override suspend fun notifyAuthExpired() {}
+        }
+        val viewModel = ConnectViewModel(authRepository = auth, gatewayAdapter = FakeGatewayProtocolAdapter())
+            .also { models.put("connect", it) }
+        viewModel.updateHost(endpoint.host)
+        viewModel.testConnection()
+        assertEquals(ConnectState.FIRST_LAUNCH, viewModel.uiState.value.state)
+        assertEquals(StartupPresentation.SETUP, viewModel.uiState.value.startupPresentation)
+        assertEquals("Saved connection could not be loaded. Try again.", viewModel.uiState.value.errorMessage)
+        assertEquals(0, checks)
+    }
+
+    @Test fun profileSwitchPreferenceReadFailureShowsAnErrorWithoutConnecting() = runBlocking {
+        val vault = EncryptedVault(temp.newFolder(), AesGcmCipherEngine(InMemoryMasterKeyProvider()), main.testDispatcher)
+        vault.saveConnectionProfile(ConnectionProfile("first", endpoint.originUrl, "First"))
+        vault.saveConnectionProfile(ConnectionProfile("second", "http://other.invalid:9119", "Second"))
+        var fail = false
+        val auth = object : AuthRepository {
+            override suspend fun rememberLoginPreference(origin: CanonicalOrigin): Boolean {
+                if (fail) throw java.io.IOException("Synthetic preference read failure")
+                return true
+            }
+            override suspend fun hasValidSession(origin: CanonicalOrigin?) = false
+            override suspend fun signOut(clearDrafts: Boolean, cacheChoice: SignOutCacheChoice) {}
+            override suspend fun notifyAuthExpired() {}
+        }
+        val viewModel = ConnectViewModel(authRepository = auth, vaultStorage = vault, gatewayAdapter = FakeGatewayProtocolAdapter())
+            .also { models.put("connect", it) }
+        fail = true
+        viewModel.switchProfile("first").join()
+        assertEquals(ConnectState.FIRST_LAUNCH, viewModel.uiState.value.state)
+        assertEquals(StartupPresentation.SETUP, viewModel.uiState.value.startupPresentation)
+        assertEquals("Saved connection could not be loaded. Try again.", viewModel.uiState.value.errorMessage)
+    }
+
     @Test fun passwordFormPassesTheUncheckedRememberChoiceAndClearsThePassword() {
         val auth = object : AuthRepository {
             override suspend fun login(origin: CanonicalOrigin, username: String, password: CharArray,

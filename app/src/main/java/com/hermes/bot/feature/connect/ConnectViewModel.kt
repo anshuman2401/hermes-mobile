@@ -489,8 +489,17 @@ class ConnectViewModel(
                     resetToFirstLaunch()
                 }
                 throw cancelled
+            } catch (_: Exception) {
+                reportSavedConnectionReadFailure(generation)
             }
         }
+    }
+
+    private fun reportSavedConnectionReadFailure(generation: Long) {
+        if (!profileGenerationGate.isCurrent(generation)) return
+        setState(ConnectState.FIRST_LAUNCH)
+        _uiState.update { it.copy(startupPresentation = StartupPresentation.SETUP,
+            loginLoading = false, passwordDraft = "", errorMessage = "Saved connection could not be loaded. Try again.") }
     }
 
     private suspend fun performGatewayConnect(canonicalOrigin: CanonicalOrigin, hostStatus: HostStatus?, generation: Long,
@@ -788,7 +797,10 @@ class ConnectViewModel(
 
         // 4. Rebind & auto-connect
         isAddMode = false
-        loadStoredProfile(explicitConnect = true)
+        val generation = profileGenerationGate.currentGeneration()
+        try { loadStoredProfile(explicitConnect = true) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { reportSavedConnectionReadFailure(generation) }
         reloadProfiles()
     }
 
