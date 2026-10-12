@@ -2,6 +2,14 @@
 
 Publishing source and distributing an APK are separate actions. The [verification runbook](../testing/verification.md) covers policy, JVM tests, lint and debug assembly. None of those checks certify a release signing identity, Android device behavior or a deployed host.
 
+## App identity and versioning
+
+The release application ID is `com.anshuman2401.hermesmobile`. Debug builds use `com.anshuman2401.hermesmobile.debug`; synthetic stream-profile builds use `.streamprofile`. The internal Kotlin namespace remains `com.hermes.bot`. Changing from the old application ID creates a separate installation with fresh app-private storage and Keystore keys; local data is not migrated automatically.
+
+[version.properties](../../version.properties) is the single source for the Android version and the Settings footer. The initial public version is `0.1.0`, indicating a pre-1.0 app. Use `MAJOR.MINOR.PATCH`: while below 1.0, increment MINOR for features or breaking changes and PATCH for compatible fixes. From 1.0 onward, increment MAJOR for breaking changes, MINOR for compatible features, and PATCH for compatible fixes. Reset lower components when incrementing a higher one. Version numbers have no leading zeros.
+
+For each distributed update, change `VERSION_NAME` as appropriate and increase `VERSION_CODE` above every previously distributed code for that application ID; never reset or derive the code from Git commit counts. The build rejects malformed names and codes outside Android's supported range. Debug builds append `-debug`, and Settings shows the installed build version. Keep the application ID and signing identity stable for future updates. Version edits do not publish a release; releases and tags require maintainer authorization. See the signing and candidate checks below before distributing an APK.
+
 ## Signing
 
 Debug builds use Android's normal debug signing setup. Release builds require all four explicit settings, supplied through local Gradle properties or environment variables: `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD`. Project properties take precedence over environment variables. Empty values count as missing. Keep values outside Git, reports, screenshots, command history and public CI.

@@ -1,66 +1,83 @@
 # Hermes Mobile
 
-Hermes Mobile is an independent Kotlin/Jetpack Compose Android client for a compatible, owner-controlled [Hermes Agent](https://github.com/NousResearch/hermes-agent) host. You can browse host sessions and conversations, send prompts, and follow streamed responses and tool activity. The host runs the agent and owns session and transcript history; this repository contains the Android app, not a host. Compatibility depends on the host's available APIs and version. This client is unofficial and is not affiliated with or endorsed by Nous Research.
+**Your Hermes conversations, bots, and work on Android.**
 
-## Requirements
+Hermes Mobile is a native Android client for a compatible, owner-controlled [Hermes Agent](https://github.com/NousResearch/hermes-agent) host. Chat with your agent, follow its responses and tool activity, and manage supported host features from your phone. The agent runs on your host; this repository contains the Android app.
 
-- Access to this repository, Git, and network access to download the Gradle wrapper distribution and dependencies on the first build.
-- JDK 21. The project uses the checked-in Gradle 9.5.0 wrapper; a separate Gradle installation is unnecessary.
-- An Android SDK with **SDK Platform 37** and build tools compatible with Android Gradle Plugin 9.3.0. Install these with Android Studio's SDK Manager or the Android command-line tools before building. The project compiles against API 37, targets API 36, and supports devices running **Android 8.0 (API 26) or newer**. Those declarations do not mean the app has been tested on every supported Android version.
-- Bash and Python 3 for the repository verification script. A device, emulator, release keystore, Hermes host, and private credentials are unnecessary for the local JVM/lint/debug build.
+Built with Kotlin and Jetpack Compose · Android 8.0+ · Pre-1.0
 
-The declared toolchain versions are listed in the [toolchain reference](specs/build/toolchain.md). The Android SDK location is a local machine setting: set `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) in your shell, or create an ignored `local.properties` containing `sdk.dir=/path/to/android-sdk`. Do not commit that file, SDK paths, signing keys, or credentials. The debug build uses Android's normal debug signing setup; no release signing configuration is required.
+[Features](#features) · [Getting started](#getting-started) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md)
 
-## Set up and verify
+Hermes Mobile is an independent, unofficial client and is not affiliated with or endorsed by Nous Research.
 
-From a fresh clone, install the prerequisites above and run. The clone command requires repository access; an unauthenticated browser may not be able to open the repository URL.
+## Features
+
+Feature availability depends on your host's APIs and permissions. The app includes:
+
+| Area | What you can do |
+| --- | --- |
+| Conversations | Browse, search, and pin sessions; send prompts; follow streamed responses, Markdown, code blocks, and tool activity. |
+| Chat controls | Stop a turn, queue follow-up text prompts, and edit eligible user messages. Review tool approvals and delegated-agent activity when supported. |
+| Voice and files | Dictate an editable draft through host transcription; preview and export supported conversation files. Sending a dictated draft remains explicit. |
+| Bots and workspaces | Switch context profiles, choose favourite bots, and open their channel conversations. |
+| Work | Manage scheduled jobs, work with Kanban tasks, and browse managed files through the host's supported APIs. |
+| Brain | Configure the selected profile's main and auxiliary model settings, and browse installed skills. |
+| Bot screen | View a bot's host desktop and request control when the host supports screen sharing. |
+| Settings and insights | Choose a theme, manage saved connections, and view host health, usage analytics, logs, and update status. |
+
+Saved drafts and eligible conversation previews help you return to your work. Offline previews are labelled caches; the host remains authoritative for conversation history. An uncertain prompt submission is never automatically resent.
+
+## Getting started
+
+You need a **compatible Hermes host you control**. This repository does not yet identify a verified public host distribution/revision with a reproducible installation guide. An arbitrary upstream Hermes Agent installation is not guaranteed to provide this client's APIs; obtain the compatible version and setup instructions from your host maintainer.
+
+1. Build the Android app using the instructions below and install the debug APK on your device.
+2. Open the app and add a connection label, host, and port.
+3. Sign in when prompted, then select a workspace or conversation.
+
+The current connection form uses **HTTP** and displays a cleartext warning. Use an owner-controlled private network or an encrypted tunnel you configure. The app cannot detect or guarantee tunnel protection. There is no bundled host or public demo endpoint.
+
+For protocol details, see the [connection and authentication contract](specs/architecture/current-system.md#connection-origin-and-auth-flow). The historical [synthetic fixture manifest](app/src/test/resources/fixtures/v0.21.1/manifest.json) is test evidence, not a supported-host version matrix.
+
+## Build from source
+
+Install these prerequisites:
+
+- Git, **JDK 21**, Bash, Python 3, and `flock` for the shared build lock.
+- Android SDK **Platform 37** and build tools compatible with Android Gradle Plugin 9.3.0.
+- Network access for the first Gradle/dependency download, and repository access while it is private.
+
+The checked-in Gradle wrapper supplies Gradle; a separate installation is unnecessary. Configure SDK discovery with `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) or an ignored `local.properties`. See the [toolchain reference](specs/build/toolchain.md) for exact versions.
 
 ```bash
 git clone https://github.com/anshuman2401/hermes-mobile.git
 cd hermes-mobile
 java -version                       # confirm JDK 21
-./scripts/verify.sh
+hermes_git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+flock --exclusive "$hermes_git_common_dir/hermes-mobile-gradle.lock" ./scripts/verify.sh
 ```
 
-Set the SDK environment variable in your shell before the verifier if Android Studio has not already exposed the SDK, for example `export ANDROID_HOME=/path/to/android-sdk`. No Hermes endpoint or app configuration is needed for this command: the JVM tests use synthetic fixtures. The verifier runs repository policy checks, JVM tests, Android lint, and debug APK assembly. It does not run the app, package instrumentation tests, or test a device or host. Reports and the debug APK are generated under `app/build/`. See the [verification runbook](specs/testing/verification.md) for report paths and the clean final-candidate command. If verification cannot run, report the missing prerequisite or failing stage rather than treating assembly or cached output as device evidence.
+The verifier runs policy checks, JVM tests, Android lint, and debug APK assembly. It needs no host, real credentials, device, or release keystore. Use the [shared Gradle lock](specs/testing/verification.md#shared-gradle-lock).
 
-When running Gradle or the verifier, use the [shared lock procedure](specs/testing/verification.md#shared-gradle-lock) so worktrees cannot build concurrently.
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Install it with Android's package installer or `adb install app/build/outputs/apk/debug/app-debug.apk` on your chosen device. Test and lint reports are under `app/build/reports/`.
 
-For a documentation-only change, review the text and links and run `git diff --check`; the full verifier is unnecessary unless specifically requested. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.
+Debug and release installations have separate application IDs and local storage. See [app identity, versioning, and release signing](specs/build/release.md) before distributing a build. Keep signing material, local SDK paths, credentials, and private host data out of Git.
 
-GitHub Actions verification is [manual-only](.github/workflows/verify.yml); pushes and pull requests do not start hosted runs. Run `./scripts/verify.sh` locally for executable changes and include the results in the PR as described in [CONTRIBUTING.md](CONTRIBUTING.md). A maintainer can request a hosted run using the [manual workflow procedure](specs/testing/verification.md#manual-github-actions-verification).
+## Privacy and current limits
 
-## App identity and versioning
+- Saved connection/auth data and drafts use app-private storage protected by Android Keystore. Android backup is disabled; the app has no telemetry. Host usage analytics are a host feature, not phone telemetry.
+- Connected features depend on host compatibility and permissions. Local cache views do not establish current server state.
+- The app supports Android API 26+, targets API 36, and compiles against API 37. This does not imply testing on every supported device or Android version.
+- The verifier checks code and builds a debug APK; it does not establish physical-device behavior, live-host compatibility, or release readiness. See the [QA coverage matrix](specs/testing/android-qa-matrix.md) for the separate evidence tiers.
 
-The release application ID is `com.anshuman2401.hermesmobile`. Debug builds use `com.anshuman2401.hermesmobile.debug`; synthetic stream-profile builds use `.streamprofile`. The internal Kotlin namespace remains `com.hermes.bot`. Changing from the old application ID creates a separate installation with fresh app-private storage and Keystore keys; local data is not migrated automatically.
+## Contributing
 
-[version.properties](version.properties) is the single source for the Android version and the Settings footer. The initial public version is `0.1.0`, indicating a pre-1.0 app. Use `MAJOR.MINOR.PATCH`: while below 1.0, increment MINOR for features or breaking changes and PATCH for compatible fixes. From 1.0 onward, increment MAJOR for breaking changes, MINOR for compatible features, and PATCH for compatible fixes. Reset lower components when incrementing a higher one. Version numbers have no leading zeros.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [contributor rules](AGENTS.md). The [architecture guide](specs/architecture/current-system.md) explains the app's boundaries, and the [documentation index](specs/README.md) links deeper references.
 
-For each distributed update, change `VERSION_NAME` as appropriate and increase `VERSION_CODE` above every previously distributed code for that application ID; never reset or derive the code from Git commit counts. The build rejects malformed names and codes outside Android's supported range. Debug builds append `-debug`, and Settings shows the installed build version. Keep the application ID and signing identity stable for future updates. Version edits do not publish a release; releases and tags require maintainer authorization. See [release preparation](specs/build/release.md) for explicit signing configuration and checks on the actual release APK.
+Run the [local verifier](specs/testing/verification.md) for executable changes. GitHub Actions is [manual-only](.github/workflows/verify.yml), so pushes and pull requests do not start hosted runs. Documentation-only changes need content/link review and `git diff --check`.
 
-## Host compatibility
-
-This repository does not yet document a verified public host distribution/revision and reproducible host installation procedure. The upstream Hermes Agent link identifies the related project; it is not a guarantee that an arbitrary upstream release implements this client's APIs. Before using the app, obtain the compatible host source/version and setup instructions from your host maintainer.
-
-The [fixture manifest](app/src/test/resources/fixtures/v0.21.1/manifest.json) records historical synthetic contract evidence labelled `v0.21.1`, with its source branch and commit. That label is not a current supported-version matrix or a verified upstream installation recipe. The [connection contract](specs/architecture/current-system.md#connection-origin-and-auth-flow) describes status discovery, password-session authentication, one-use WebSocket tickets, and gateway readiness/capability checks. Additional features depend on the APIs described in the same architecture guide. Successful compilation or fixture tests do not establish deployed-host compatibility.
-
-You can build and run the local verifier without a host. Using connected features requires a compatible host you control; this repository supplies neither a host nor a public demo endpoint.
-
-## First run and connecting
-
-On a fresh install, the app opens its Connect setup. Enter a local connection label, the host or IP address, and port for a **compatible Hermes host you control**. The app checks the host's status and supported authentication before connecting; a compatible password-session host can then prompt for sign-in. A running upstream Hermes Agent alone is not proof that its status, authentication, WebSocket ticket, and gateway capabilities match this client. The [current architecture](specs/architecture/current-system.md) describes the app's protocol boundary.
-
-The current connection form uses HTTP only and displays a cleartext warning. Use an owner-controlled private network or encrypted tunnel you set up; the app cannot detect or guarantee its protection. Do not enter real credentials into a test setup or attach them to issues or build logs. Once connected, the app requests sessions and conversation history from the host. A new install has no local session history; the app does not create or bundle a Hermes host or sample server data. Saved local state may make a returning install open Sessions while reconnecting, and offline rows or snapshots are labelled local caches rather than host truth.
-
-## Known limits
-
-- Host compatibility and optional capabilities vary by deployment; there is no bundled host or public demo endpoint. Live-host sign-in and conversation behavior require separate owner testing.
-- The verifier proves static/JVM checks and debug APK assembly only. Android Keystore, UI behavior, network routing, and device/API coverage need separate device or manual evidence; see the [QA matrix](specs/testing/android-qa-matrix.md).
-- The app is currently HTTP-only. Cleartext traffic is not protected by the app itself, and it cannot attest to VPN or tunnel protection. See the [connection architecture](specs/architecture/current-system.md#connection-origin-and-auth-flow).
-- Local session summaries and offline conversation snapshots are bounded caches. The host remains authoritative for titles, transcripts, and turn outcomes; an ambiguous prompt submission is not automatically retried.
-
-For engineering work, read the repository [rules](AGENTS.md), [documentation guide](specs/README.md), and [current system](specs/architecture/current-system.md).
+Report vulnerabilities through the channels in [SECURITY.md](SECURITY.md). Do not post credentials, private host addresses, or owner content in public issues. Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-Project-authored code and documentation are available under the [MIT License](LICENSE), except where otherwise noted. The [Code of Conduct](CODE_OF_CONDUCT.md) is an adaptation of Contributor Covenant 3.0 under CC BY-SA 4.0. Bundled fonts, third-party libraries, and build tooling retain their own licenses, summarized in [third-party notices](THIRD_PARTY_NOTICES.md).
+Project-authored code and documentation use the [MIT License](LICENSE), except where otherwise noted. Fonts, libraries, tooling, and the adapted Code of Conduct retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
