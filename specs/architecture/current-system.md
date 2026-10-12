@@ -188,7 +188,7 @@ The forced update-check GET has a 60-second read and total-call budget; ordinary
 
 ## Work: Crons
 
-Work now hosts the Crons feature, with room for a future Kanban page. Profile
+Work contains Crons, Kanban, and Files sections. The Crons profile
 chips default to All and filter the host-wide job list locally, independently of
 workspace selection. The lifecycle-owned WorkCronsViewModel delegates management
 to CronRepository -> CronHttpAdapter -> AuthHttpTransport. The adapter binds
