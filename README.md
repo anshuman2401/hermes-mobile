@@ -2,6 +2,22 @@
 
 Hermes Mobile is an independent Kotlin/Jetpack Compose Android client for a compatible, owner-controlled [Hermes Agent](https://github.com/NousResearch/hermes-agent) host. You can browse host sessions and conversations, send prompts, and follow streamed responses and tool activity. The host runs the agent and owns session and transcript history; this repository contains the Android app, not a host. Compatibility depends on the host's available APIs and version. This client is unofficial and is not affiliated with or endorsed by Nous Research.
 
+## Feature showcase
+
+Explore scheduled tasks, Kanban boards, conversations, and bots. Connected features depend on the capabilities of your compatible Hermes host.
+
+| Scheduled tasks | Kanban boards |
+| --- | --- |
+| <img src="docs/images/feature-showcase/01-scheduled-tasks.png" alt="Scheduled tasks: create recurring tasks, filter by status, and view run results" width="420"> | <img src="docs/images/feature-showcase/02-kanban.png" alt="Kanban boards: create task cards, switch boards, and track progress" width="420"> |
+
+| Chat | Bots |
+| --- | --- |
+| <img src="docs/images/feature-showcase/03-chat.png" alt="Chat: converse with Hermes, access chat files, and choose model controls" width="420"> | <img src="docs/images/feature-showcase/04-bots.png" alt="Bots: find favorites, browse threads, and start conversations" width="420"> |
+
+### Bot screen
+
+<img src="docs/images/feature-showcase/05-bot-screen.png" alt="Bot screen: view the screen, zoom and pan, and take over controls" width="420">
+
 ## Requirements
 
 - Access to this repository, Git, and network access to download the Gradle wrapper distribution and dependencies on the first build.
