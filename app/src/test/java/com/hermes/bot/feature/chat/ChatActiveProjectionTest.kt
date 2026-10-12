@@ -258,7 +258,7 @@ class ChatActiveProjectionTest {
             observed.add(vm.uiState.value.timeline.filterIsInstance<UserMessage>().none { it.sourceKind == ActiveSourceKind.LOCAL_USER })
             assertEquals(0L, vm.uiState.value.timeline.first { it.id == "stored-2" }.timestamp)
         }
-        assertEquals(listOf(true, false, false, true), observed)
+        assertEquals(listOf(true, true, false, true), observed)
         val a = group("a","assistant","", seconds=10.25)
         val u = group("u","user","Synthetic user",seconds=20.0)
         val repeated = listOf(a, u, a.copy(id="later"))
@@ -268,6 +268,26 @@ class ChatActiveProjectionTest {
         assertFalse(ActiveHistoryFold.suppressInflightUser(listOf(a,u), listOf(a.copy(sourceTimestampSeconds=null)), u.text))
         assertTrue(ActiveHistoryFold.suppressInflightUser(listOf(a.copy(parts=listOf(AssistantMessage("a","Synthetic answer",timestamp=0))),u),
             listOf(group("r","assistant"," Synthetic   answer ")),u.text))
+    }
+
+    @Test fun inflightUserFoldKeepsOccurrenceAndAnswerBoundaries() {
+        val question = group("u", "user", "Synthetic question", seconds = 100.0)
+        val anchor = group("a", "assistant", "Synthetic previous answer", seconds = 90.0)
+        val activity = ActiveFoldMessage("activity", "assistant", listOf(
+            ToolActivity("tool", "synthetic-call", "terminal", ToolStatus.COMPLETED)), ActiveSourceKind.STORED)
+        val result = ActiveFoldMessage("result", "tool", emptyList(), ActiveSourceKind.STORED)
+        val stored = listOf(anchor, question, activity, result)
+        assertTrue(ActiveHistoryFold.suppressInflightUser(stored, listOf(question), " Synthetic   question "))
+        assertTrue(ActiveHistoryFold.suppressInflightUser(stored, listOf(anchor), question.text))
+        assertTrue(ActiveHistoryFold.suppressInflightUser(stored, emptyList(), question.text))
+        assertFalse(ActiveHistoryFold.suppressInflightUser(stored, listOf(question.copy(sourceTimestampSeconds = 99.0)), question.text))
+        assertFalse(ActiveHistoryFold.suppressInflightUser(stored, listOf(group("missing", "assistant", "Synthetic missing anchor")), question.text))
+        assertFalse(ActiveHistoryFold.suppressInflightUser(stored + group("answer", "assistant", "Synthetic final answer"), listOf(question), question.text))
+        assertFalse(ActiveHistoryFold.suppressInflightUser(stored + group("other", "user", "Synthetic different question"), listOf(question), question.text))
+        assertFalse(ActiveHistoryFold.suppressInflightUser(stored + group("unknown", "assistant", ""), listOf(question), question.text))
+        // An older identical prompt has an answer; the new occurrence remains visible.
+        val repeated = listOf(question, group("answer", "assistant", "Synthetic final answer"))
+        assertFalse(ActiveHistoryFold.suppressInflightUser(repeated, listOf(question), question.text))
     }
 
     @Test fun onlyRepresentedSyntheticOpenTailIsRemoved() = runBlocking(main.testDispatcher) { scenario { f ->

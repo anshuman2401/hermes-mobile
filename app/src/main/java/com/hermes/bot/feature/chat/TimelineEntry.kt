@@ -294,8 +294,19 @@ internal object ActiveHistoryFold {
         val last = runtime.lastOrNull()
         val index = if (last == null) -1 else stored.indexOfLast { anchor(last, it) }
         if (last != null && index < 0) return false
-        val tail = stored.drop(index + 1).lastOrNull() ?: return false
-        return tail.role == "user" && normalized(tail.text).isNotEmpty() && normalized(tail.text) == normalized(user)
+        val userIndex = stored.indexOfLast { it.role == "user" }
+        // The resume anchor can be the active user row itself. Tool activity
+        // after that row does not make the inflight copy a second prompt.
+        if (userIndex < 0 || userIndex < index) return false
+        val candidate = stored[userIndex]
+        if (normalized(candidate.text).isEmpty() || normalized(candidate.text) != normalized(user)) return false
+        // Keep the old conservative boundary at an answer or an unknown row:
+        // text equality alone must not hide a later repeated prompt.
+        return stored.drop(userIndex + 1).all { row ->
+            row.role == "tool" || (row.role == "assistant" && row.text.isBlank() && row.parts.isNotEmpty() &&
+                row.parts.all { it is ToolActivity || it is ReasoningEntry ||
+                    (it is GenericGatewayActivity && it.eventType == "history.tool") })
+        }
     }
 
     fun removeRepresentedTail(stored: List<ActiveFoldMessage>, current: List<ActiveFoldMessage>): List<ActiveFoldMessage> {
