@@ -1,0 +1,23 @@
+// Read-only release artifact export for the notice audit.
+// Run under the shared Gradle lock with --no-configuration-cache.
+// Output contains machine-local paths and must stay in ignored build/.
+allprojects { p ->
+    afterEvaluate {
+        if (p.path == ':app') {
+            tasks.register('exportReleaseLicenseInputs') {
+                doLast {
+                    def rows = []
+                    ['releaseRuntimeClasspath', 'coreLibraryDesugaring'].each { n ->
+                        p.configurations.getByName(n).resolvedConfiguration.resolvedArtifacts.each { a ->
+                            rows << [configuration: n, coordinate: a.moduleVersion.id.toString(), file: a.file.absolutePath]
+                        }
+                    }
+                    def out = new File(p.rootProject.projectDir, 'build/license-inputs.json')
+                    out.parentFile.mkdirs()
+                    out.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(rows))
+                    println 'License inputs written to build/license-inputs.json'
+                }
+            }
+        }
+    }
+}

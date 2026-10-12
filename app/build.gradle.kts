@@ -42,21 +42,12 @@ android {
             val keyAliasProp = findProperty("RELEASE_KEY_ALIAS") as String? ?: System.getenv("RELEASE_KEY_ALIAS")
             val keyPasswordProp = findProperty("RELEASE_KEY_PASSWORD") as String? ?: System.getenv("RELEASE_KEY_PASSWORD")
 
-            if (storeFileProp != null && file(storeFileProp).exists()) {
-                storeFile = file(storeFileProp)
-                storePassword = storePasswordProp
-                keyAlias = keyAliasProp
-                keyPassword = keyPasswordProp
-            } else {
-                // Sideload candidate default: sign with local developer keystore for verifiable private installation
-                val debugKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
-                if (debugKeystore.exists()) {
-                    storeFile = debugKeystore
-                    storePassword = "android"
-                    keyAlias = "androiddebugkey"
-                    keyPassword = "android"
-                }
-            }
+            // Release signing is explicit. Missing or invalid values are rejected
+            // by the release task gate and AGP; debug builds keep their own key.
+            storeFile = storeFileProp?.takeIf { it.isNotEmpty() }?.let { file(it) }
+            storePassword = storePasswordProp?.takeIf { it.isNotEmpty() }
+            keyAlias = keyAliasProp?.takeIf { it.isNotEmpty() }
+            keyPassword = keyPasswordProp?.takeIf { it.isNotEmpty() }
         }
     }
 
@@ -96,6 +87,29 @@ android {
         ignoreTestSources = false
         warningsAsErrors = false
         disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion", "OldTargetApi")
+    }
+}
+
+// AGP can emit an unsigned APK for an incomplete signing config. Gate the
+// release task graph explicitly; debug tasks never depend on this check.
+val releaseSigning = android.signingConfigs.getByName("release")
+val missingReleaseSigningFields = listOfNotNull(
+    "RELEASE_STORE_FILE".takeIf { releaseSigning.storeFile == null },
+    "RELEASE_STORE_PASSWORD".takeIf { releaseSigning.storePassword.isNullOrEmpty() },
+    "RELEASE_KEY_ALIAS".takeIf { releaseSigning.keyAlias.isNullOrEmpty() },
+    "RELEASE_KEY_PASSWORD".takeIf { releaseSigning.keyPassword.isNullOrEmpty() }
+)
+val releaseSigningStoreFile = releaseSigning.storeFile
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    val missingFieldsForTask = missingReleaseSigningFields
+    val storeFileForTask = releaseSigningStoreFile
+    doFirst {
+        if (missingFieldsForTask.isNotEmpty()) {
+            throw GradleException("Release signing requires: ${missingFieldsForTask.joinToString()}")
+        }
+        if (storeFileForTask?.isFile != true) {
+            throw GradleException("Release signing requires an existing keystore file")
+        }
     }
 }
 

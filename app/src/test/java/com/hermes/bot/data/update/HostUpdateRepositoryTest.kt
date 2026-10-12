@@ -16,12 +16,25 @@ import com.hermes.bot.data.local.InMemoryMasterKeyProvider
 import com.hermes.bot.data.origin.CanonicalOrigin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.util.Collections
 import java.util.concurrent.TimeUnit
 
 class HostUpdateRepositoryTest {
@@ -152,29 +165,76 @@ class HostUpdateRepositoryTest {
     }
 
     @Test fun statusHeaderAndBodyTimeoutsAreReportedWithoutConnectionFailure() = runBlocking {
-        val client = okhttp3.OkHttpClient.Builder().readTimeout(100, TimeUnit.MILLISECONDS).build()
-        fixture(OkHttpHostUpdateTransport(client)).use { f ->
-            f.prepare()
-            f.server.enqueue(MockResponse().setHeadersDelay(1, TimeUnit.SECONDS).setBody("{}"))
-            assertEquals(HostUpdateFailure.TIMEOUT, (f.repo.status(f.scope()) as HostUpdateResult.Failed).reason)
-            f.server.enqueue(MockResponse().setBodyDelay(1, TimeUnit.SECONDS).setBody("{}"))
-            assertEquals(HostUpdateFailure.TIMEOUT, (f.repo.status(f.scope()) as HostUpdateResult.Failed).reason)
-            assertEquals(2, f.server.requestCount)
+        for (failure in listOf(SocketTimeoutException(), InterruptedIOException())) {
+            for (beforeHeaders in listOf(true, false)) {
+                assertStatusFailure(failure, beforeHeaders, HostUpdateFailure.TIMEOUT)
+            }
+        }
+    }
+
+    @Test fun statusHeaderAndBodyConnectionFailuresAreNotTimeouts() = runBlocking {
+        for (beforeHeaders in listOf(true, false)) {
+            assertStatusFailure(IOException(), beforeHeaders, HostUpdateFailure.UNAVAILABLE)
         }
     }
 
     @Test fun timedOutStartRemainsUnknownAndNeverRetries() = runBlocking {
-        val client = okhttp3.OkHttpClient.Builder().readTimeout(100, TimeUnit.MILLISECONDS).build()
-        fixture(OkHttpHostUpdateTransport(client)).use { f ->
-            f.prepare()
-            f.server.enqueue(MockResponse().setBody(available))
-            f.server.enqueue(MockResponse().setHeadersDelay(1, TimeUnit.SECONDS).setBody("""{"ok":true,"action_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"""))
-            assertEquals(HostUpdateFailure.UNKNOWN, (f.repo.start(f.scope()) as HostUpdateResult.Failed).reason)
-            assertEquals("GET", f.request().method)
-            assertEquals("POST", f.request().method)
-            assertEquals(2, f.server.requestCount)
+        for (beforeHeaders in listOf(true, false)) {
+            val requests = Collections.synchronizedList(mutableListOf<Request>())
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                requests.add(request)
+                if (request.method == "GET") {
+                    syntheticResponse(request, available.toResponseBody())
+                } else {
+                    failingResponse(request, SocketTimeoutException(), beforeHeaders)
+                }
+            }.build()
+            fixture(OkHttpHostUpdateTransport(client)).use { f ->
+                f.prepare()
+                assertEquals(HostUpdateFailure.UNKNOWN, (f.repo.start(f.scope()) as HostUpdateResult.Failed).reason)
+                assertEquals(listOf("GET", "POST"), requests.map { it.method })
+                assertEquals(listOf("/api/hermes/update/check", "/api/hermes/update"), requests.map { it.url.encodedPath })
+                assertTrue(requests.all { it.header("Cookie") == "session=synthetic-cookie" })
+            }
         }
     }
+
+    private suspend fun assertStatusFailure(failure: IOException, beforeHeaders: Boolean, expected: HostUpdateFailure) {
+        val requests = Collections.synchronizedList(mutableListOf<Request>())
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            requests.add(request)
+            failingResponse(request, failure, beforeHeaders)
+        }.build()
+        fixture(OkHttpHostUpdateTransport(client)).use { f ->
+            f.prepare()
+            assertEquals("${failure.javaClass.simpleName}, beforeHeaders=$beforeHeaders",
+                expected, (f.repo.status(f.scope()) as HostUpdateResult.Failed).reason)
+            assertEquals(1, requests.size)
+            assertEquals("GET", requests.single().method)
+            assertEquals("/api/actions/hermes-update/status", requests.single().url.encodedPath)
+            assertEquals("lines=1", requests.single().url.encodedQuery)
+            assertEquals("session=synthetic-cookie", requests.single().header("Cookie"))
+        }
+    }
+
+    // Exercise the real OkHttp callback and body-read failure paths without racing
+    // worker scheduling against short wall-clock socket/server delays.
+    private fun failingResponse(request: Request, failure: IOException, beforeHeaders: Boolean): Response {
+        if (beforeHeaders) throw failure
+        val source = object : ForwardingSource(Buffer()) {
+            override fun read(sink: Buffer, byteCount: Long): Long = throw failure
+        }.buffer()
+        return syntheticResponse(request, object : ResponseBody() {
+            override fun contentType() = null
+            override fun contentLength() = -1L
+            override fun source() = source
+        })
+    }
+
+    private fun syntheticResponse(request: Request, body: ResponseBody): Response = Response.Builder()
+        .request(request).protocol(Protocol.HTTP_1_1).code(200).message("Synthetic").body(body).build()
 
     private class Fixture(folder: java.io.File, transport: HostUpdateTransport?) : AutoCloseable {
         val server = MockWebServer().apply { start() }

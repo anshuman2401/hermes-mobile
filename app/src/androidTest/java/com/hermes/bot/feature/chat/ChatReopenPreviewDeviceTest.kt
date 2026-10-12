@@ -125,8 +125,8 @@ class ChatReopenPreviewDeviceTest {
                 }
             }
             compose.waitForIdle()
-            compose.waitUntil(10_000) { compose.onAllNodesWithText("Synthetic preview chat").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
-            compose.onNodeWithText("Synthetic preview chat").performClick()
+            waitForSessionOpenAction()
+            compose.onNodeWithContentDescription("Session: Synthetic preview chat").assertIsEnabled().performClick()
             compose.waitUntil(10_000) { isDisplayed(marker(0)) }
             compose.onNodeWithText(marker(0)).assertIsDisplayed()
             // Allow ancillary save/seed work to complete before the first Back.
@@ -135,13 +135,13 @@ class ChatReopenPreviewDeviceTest {
             val timings = mutableListOf<Long>()
             repeat(5) { attempt ->
                 compose.onNodeWithContentDescription("Back to sessions").performClick()
-                compose.waitUntil(5000) { compose.onAllNodesWithText("Synthetic preview chat").fetchSemanticsNodes().isNotEmpty() }
+                waitForSessionOpenAction()
                 peer.hold = CompletableDeferred()
                 peer.revision = attempt + 1
                 peer.restEntered = false
                 peer.resumeEntered = false
                 val started = SystemClock.elapsedRealtime()
-                compose.onNodeWithText("Synthetic preview chat").performClick()
+                compose.onNodeWithContentDescription("Session: Synthetic preview chat").assertIsEnabled().performClick()
                 compose.waitUntil(2000) { isDisplayed(marker(attempt)) }
                 compose.onNodeWithText(marker(attempt)).assertIsDisplayed()
                 timings.add(SystemClock.elapsedRealtime() - started)
@@ -172,7 +172,7 @@ class ChatReopenPreviewDeviceTest {
             // check needs the final owned disk write to finish before its Back cancels the load.
             compose.waitUntil(10_000) { !visibleModel.get().uiState.value.isHistoryReadInFlight }
             compose.onNodeWithContentDescription("Back to sessions").performClick()
-            compose.waitUntil(5000) { compose.onAllNodesWithText("Synthetic preview chat").fetchSemanticsNodes().isNotEmpty() }
+            waitForSessionOpenAction()
             // A fresh repository models process-local memory loss without touching the encrypted vault.
             memory.close()
             memory = ChatPreviewRepository(vault)
@@ -187,7 +187,7 @@ class ChatReopenPreviewDeviceTest {
             peer.hold = CompletableDeferred()
             peer.restEntered = false; peer.resumeEntered = false
             val coldStarted = SystemClock.elapsedRealtime()
-            compose.onNodeWithText("Synthetic preview chat").performClick()
+            compose.onNodeWithContentDescription("Session: Synthetic preview chat").assertIsEnabled().performClick()
             compose.waitUntil(5000) { isDisplayed(coldMarker) }
             compose.onNodeWithText(coldMarker).assertIsDisplayed()
             val coldMillis = SystemClock.elapsedRealtime() - coldStarted
@@ -213,6 +213,17 @@ class ChatReopenPreviewDeviceTest {
             memory.close()
             folder.deleteRecursively()
             KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
+        }
+    }
+
+    private fun waitForSessionOpenAction() {
+        // Back starts a session refresh. A retained title can be visible while
+        // its row is disabled; clicking that text does not reopen the chat.
+        compose.waitUntil(10_000) {
+            runCatching {
+                compose.onNodeWithContentDescription("Session: Synthetic preview chat")
+                    .assertIsDisplayed().assertIsEnabled()
+            }.isSuccess
         }
     }
 
