@@ -46,7 +46,17 @@ Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`. APK assembly is never r
 
 ## Instrumentation source coverage
 
-At the 2026-10-08 integration base, `app/src/androidTest` contains `StreamRenderingDeviceTest` (synthetic chat following, keyboard/scroll and prepend behavior), `StreamRenderingProfileTest` (synthetic stream frame profiling), and `StreamProfileRunner`. Both test classes require `-PstreamProfile`, which uses an isolated `.streamprofile` debug package and avoids the production app graph. The source tree does not contain the previously listed Keystore, Connect semantics or general Chat semantics instrumentation tests. The default verifier neither packages nor runs instrumentation. Android Keystore, connection UI, navigation, accessibility beyond these streaming cases, and API-level differences therefore still need separate device/emulator checks with synthetic data.
+`app/src/androidTest` contains five test classes and the shared `StreamProfileRunner`. The runner substitutes a plain `Application`, preventing automatic production graph and vault initialization. The UI tests use `-PstreamProfile`, which provides the test activity manifest and isolated `.streamprofile` application ID. `ConversationCacheReadDeviceTest` does not require a UI activity or enforce that package suffix.
+
+| Test class | Source coverage and isolation |
+|---|---|
+| `StreamRenderingDeviceTest` | Synthetic chat rendering, delayed content growth, keyboard/draft interaction, following versus upward reading, and viewport preservation when history is prepended. Bypasses gateway and storage. |
+| `StreamRenderingProfileTest` | Synthetic streaming with the Android frame clock, keyboard editing, scrolling and jump-to-latest interaction. Emits frame/preparation/visibility metrics and checks publication count; metrics are observations, not enforced performance thresholds. |
+| `ChatQueueDeviceTest` | Queue presentation, restored waiting items, explicit resume controls, edit/cancel, ambiguous outcomes, validation, keyboard access, themes and enlarged fonts. Uses a memory-only queue store and synthetic ViewModel state. |
+| `ConversationCacheReadDeviceTest` | Five encrypted-cache reads across synthetic cookie renewals, owner validity and cache clearing. Uses Android Keystore with a disposable alias and isolated temporary storage; no network. |
+| `ChatReopenPreviewDeviceTest` | Real navigation shell, route ownership, ViewModels and repositories with synthetic gateway/HTTP transports. Checks warm cached previews across five Back/reopen cycles, replacement after delayed responses, a cold-cache preview after replacing the memory repository, and zero submitted prompts. Uses Android Keystore with disposable storage and alias. |
+
+The default verifier neither packages nor runs these instrumentation tests. Source coverage does not establish execution results, general Keystore compatibility, actual process-death recovery, deployed-host behavior or coverage across Android versions. Record separately executed results against the tested APK; connection setup, permission flows and other uncovered UI/platform behavior still need separate checks.
 
 ## Candidate execution record template
 

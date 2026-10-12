@@ -1,6 +1,10 @@
 # Third-party notices
 
-The root [MIT License](LICENSE) covers project-authored code and documentation. It does not replace the licenses of bundled fonts, resolved libraries, or build tooling. This file identifies known direct dependencies from `app/build.gradle.kts` and `gradle/libs.versions.toml`; it is not a complete resolved release-APK license inventory.
+The root [MIT License](LICENSE) covers project-authored code and documentation, except where otherwise noted. It does not replace the licenses of bundled fonts, resolved libraries, or build tooling. This file identifies known direct dependencies from `app/build.gradle.kts` and `gradle/libs.versions.toml`; it is not a complete resolved release-APK license inventory.
+
+## Code of Conduct
+
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) adapts Contributor Covenant 3.0, stewarded by the Organization for Ethical Source, under [Creative Commons Attribution-ShareAlike 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Its attribution and license remain in that document; the root MIT License does not replace them.
 
 ## Bundled fonts
 
