@@ -2,6 +2,12 @@ name: Manual verification
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_reports:
+        description: Upload detailed reports (uses artifact storage quota)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -41,14 +47,33 @@ jobs:
           packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
           log-accepted-android-sdk-licenses: false
 
+      - name: Check verification helpers and release signing gate
+        shell: bash
+        run: |
+          python3 scripts/test_verify.py
+          python3 scripts/test_ci_report_summary.py
+          python3 -B scripts/test_release_licenses.py
+          hermes_git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+          flock --exclusive "$hermes_git_common_dir/hermes-mobile-gradle.lock" python3 scripts/test_release_signing.py
+
       - name: Run repository verification
+        id: verification
         shell: bash
         run: |
           hermes_git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
           flock --exclusive "$hermes_git_common_dir/hermes-mobile-gradle.lock" ./scripts/verify.sh
 
+      - name: Verify release dependency notices and packaged assets
+        shell: bash
+        run: |
+          hermes_git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+          flock --exclusive "$hermes_git_common_dir/hermes-mobile-gradle.lock" ./gradlew --no-configuration-cache -I scripts/license-inputs.init.gradle :app:exportReleaseLicenseInputs
+          python3 scripts/check_release_licenses.py --apk app/build/outputs/apk/debug/app-debug.apk
+
       - name: Preserve test and lint reports
-        if: ${{ always() && !cancelled() }}
+        id: reports
+        if: ${{ always() && !cancelled() && inputs.upload_reports }}
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verification-reports-${{ github.run_id }}-${{ github.run_attempt }}
@@ -59,3 +84,11 @@ jobs:
             app/build/test-results/testDebugUnitTest/TEST-*.xml
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
+
+      - name: Summarize verification evidence
+        if: ${{ always() && !cancelled() }}
+        continue-on-error: true
+        env:
+          VERIFIER_OUTCOME: ${{ steps.verification.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.reports.outcome }}
+        run: python3 scripts/ci_report_summary.py

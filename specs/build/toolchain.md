@@ -6,7 +6,7 @@ Repository declarations are authoritative for versions. This reference replaces 
 |---|---|---|
 | Gradle | 9.5.0, pinned distribution checksum | `gradle/wrapper/gradle-wrapper.properties` |
 | Android Gradle Plugin | 9.3.0 | `gradle/libs.versions.toml` |
-| Kotlin / Compose compiler plugin | 2.2.10 | `gradle/libs.versions.toml` |
+| Kotlin / Compose compiler plugin | 2.4.20 | `gradle/libs.versions.toml` |
 | Compose BOM | 2026.08.00 | `gradle/libs.versions.toml` |
 | Java compatibility | 21 | `app/build.gradle.kts` |
 | Compile SDK | 37 | `app/build.gradle.kts` |
