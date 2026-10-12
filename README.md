@@ -2,6 +2,10 @@
 
 Hermes Mobile is an independent Kotlin/Jetpack Compose Android client for a compatible, owner-controlled [Hermes Agent](https://github.com/NousResearch/hermes-agent) host. You can browse host sessions and conversations, send prompts, and follow streamed responses and tool activity. The host runs the agent and owns session and transcript history; this repository contains the Android app, not a host. Compatibility depends on the host's available APIs and version. This client is unofficial and is not affiliated with or endorsed by Nous Research.
 
+## Download
+
+Get the signed Android APK and installation instructions from the [latest GitHub release](https://github.com/anshuman2401/hermes-mobile/releases/latest).
+
 ## Feature showcase
 
 Explore scheduled tasks, Kanban boards, conversations, and bots. Connected features depend on the capabilities of your compatible Hermes host.
