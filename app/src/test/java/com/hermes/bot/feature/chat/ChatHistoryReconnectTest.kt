@@ -70,6 +70,37 @@ class ChatHistoryReconnectTest {
         f.gateway.ping()
     }
 
+    @Test fun reconnectRunningStoredTurnKeepsOneUserBubbleInEitherReadOrder() = runBlocking(main.testDispatcher) {
+        for (restFirst in listOf(true, false)) scenario { f ->
+            val vm = f.vm(); f.loaded(vm)
+            f.resumeJson = """{"session_id":"synthetic-runtime","stored_session_id":"synthetic-session","message_count":1,"messages":[{"role":"user","content":"Synthetic stored question"}],"running":true,"status":"running","turn_started_at":100,"inflight":{"user":"Synthetic stored question","assistant":"","streaming":true}}"""
+            repeat(2) {
+                disconnect(f, vm)
+                val body = HttpStep(tools(), held = true)
+                val resume = RpcStep(held = true)
+                cycle(f, body, resume)
+                reconnect(f, vm); entered(f, body)
+                val id = f.await(resume.entered)
+                if (restFirst) {
+                    body.release.complete(Unit)
+                    state(vm) { !it.isInitialLoading }
+                    f.respond(resume, id, f.resumeBody())
+                } else {
+                    f.respond(resume, id, f.resumeBody())
+                    state(vm) { it.isStreaming && !it.isInitialLoading }
+                    body.release.complete(Unit)
+                }
+                val restored = f.loaded(vm)
+                assertEquals(1, restored.timeline.filterIsInstance<UserMessage>().count { it.text == "Synthetic stored question" })
+                assertEquals("stored-1", restored.timeline.filterIsInstance<UserMessage>().single { it.text == "Synthetic stored question" }.id)
+                assertEquals(1, restored.timeline.filterIsInstance<ToolActivity>().size)
+                assertEquals(1, restored.timeline.filterIsInstance<AssistantMessage>().count { it.state == AssistantMessageState.STREAMING })
+                assertTrue(restored.isStreaming)
+                noWrites(f)
+            }
+        }
+    }
+
     @Test fun connectedEdgeRestoresDisconnectedCompletion() = runBlocking(main.testDispatcher) {
         for (restFirst in listOf(true, false)) scenario { f ->
             val vm = f.vm(); f.loaded(vm); vm.updateDraft("Synthetic retained draft")
